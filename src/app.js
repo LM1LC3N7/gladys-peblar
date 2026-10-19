@@ -574,14 +574,15 @@ export class PeblarApp {
     c.meter = meter;
   }
 
-  applyEv(ev) {
+  /** fromCommand: the fresh read of a command (never reaffirms a stop: it would race it). */
+  applyEv(ev, { fromCommand = false } = {}) {
     const c = this.charger;
     c.ev = ev;
     if (ev.limit !== undefined && ev.limit >= CURRENT.min * 1000) {
       c.lastAmps = Math.floor(ev.limit / 1000);
     }
     if (c.serial) {
-      this.observe(c.serial, ev.limit);
+      this.observe(c.serial, ev.limit, { fromCommand });
     }
   }
 
@@ -605,13 +606,15 @@ export class PeblarApp {
       this.logger.info('Peblar: API token refused, logging in again');
       return 0;
     }
-    // Any other failure: the charger is not read (offline states, badge).
-    c.online = false;
     if (err.kind === LOGIN_WAIT) {
+      // Not read: offline states and badge.
+      c.online = false;
       c.error = LOGIN_WAIT;
       return Math.max(this.interval, TIMINGS.loginMinInterval - (this.now() - this.lastLoginAt));
     }
     if (err.kind === ERROR_KINDS.AUTH) {
+      // Not read until new credentials or the end of the block: offline.
+      c.online = false;
       if (this.config.auth.mode === 'token') {
         await this.authFailed('token');
         return undefined;
@@ -621,6 +624,7 @@ export class PeblarApp {
       return undefined;
     }
     if (err.kind === ERROR_KINDS.RATE_LIMITED) {
+      // The charger answers: it stays online, the status shows the 429 pause.
       await this.pause(err);
       this.logger.warn(`Peblar: ${reason}, pause`);
       return undefined;
@@ -693,7 +697,7 @@ export class PeblarApp {
     }
     const pause = this.pauseMessage();
     if (pause) {
-      return [Boolean(c.ev) && c.online !== false, pause];
+      return [false, pause];
     }
     if (this.blocked) {
       const wait = age(this.memory.block.until - this.now());
@@ -1113,7 +1117,7 @@ export class PeblarApp {
       }
       // Applied only when no command left during the read.
       if (fresh && readStart > c.lastSentAt) {
-        this.applyEv(fresh);
+        this.applyEv(fresh, { fromCommand: true });
         // Shown in the background: the ack never waits for Gladys.
         this.publishAll().catch((err) => this.logger.warn(`Publishing failed: ${err.message}`));
       }
@@ -1275,7 +1279,8 @@ export class PeblarApp {
       expected: plan.limit,
       moved: false,
       until: keep ? held.until : this.now() + TIMINGS.guard,
-      reassertFrom: keep ? held.reassertFrom : reassertFrom,
+      // A second stop click renews the reaffirmation from its own time.
+      reassertFrom: keep ? (reassertFrom ?? held.reassertFrom) : reassertFrom,
       reasserts: keep ? held.reasserts : 0,
     });
   }
@@ -1291,7 +1296,7 @@ export class PeblarApp {
   }
 
   /** A read of the limit, through the guard: never lifted on an unknown value. */
-  observe(serial, limit) {
+  observe(serial, limit, { fromCommand = false } = {}) {
     if (!this.guardActive(serial) || limit === undefined) {
       return;
     }
@@ -1306,7 +1311,9 @@ export class PeblarApp {
       // after it: the stop is sent again, twice at most.
       if (
         limit > 0 &&
-        this.charger.lastCommandAt <= guard.reassertFrom &&
+        !fromCommand &&
+        !(this.inFlight && this.inFlight.role !== FEATURES.STOP) &&
+        this.charger.lastCurrentAt <= guard.reassertFrom &&
         guard.reasserts < TIMINGS.stopReasserts
       ) {
         guard.reasserts += 1;

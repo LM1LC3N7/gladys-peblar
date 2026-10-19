@@ -307,11 +307,60 @@ test('M9, M10: the docs say the token-only ceiling and the clear HTTP', () => {
   assert.match(read('docs/fr.md'), /jeton\s+seul/i);
 });
 
-test('M11: any failure shows the charger offline (429 and refused token included)', async (t) => {
+test('M11: a refused token shows the charger offline', async (t) => {
+  const server = fakeCharger();
+  const ctx = await setup(t, { config: TOKEN_CFG, server });
+  server.charger.token = 'z'.repeat(64);
+  await ctx.advance(30 * SECOND, SECOND);
+  assert.equal(ctx.gladys.fake.lastState(`${DEVICE}:status`), 'Borne injoignable');
+  assert.equal(ctx.gladys.fake.transports.at(-1).transport, DEVICE_TRANSPORTS.UNREACHABLE);
+});
+
+test('S21: a 429 keeps the charger online; the status says the 429 pause', async (t) => {
   const server = fakeCharger();
   const ctx = await setup(t, { config: TOKEN_CFG, server });
   server.charger.statuses['/api/wlac/v1/system'] = 429;
   await ctx.advance(30 * SECOND, SECOND);
-  assert.equal(ctx.gladys.fake.lastState(`${DEVICE}:status`), 'Borne injoignable');
-  assert.equal(ctx.gladys.fake.transports.at(-1).transport, DEVICE_TRANSPORTS.UNREACHABLE);
+  assert.equal(ctx.gladys.fake.lastState(`${DEVICE}:status`), 'En charge');
+  assert.equal(ctx.gladys.fake.transports.at(-1).transport, DEVICE_TRANSPORTS.LOCAL);
+  assert.match(ctx.status().message.fr, /HTTP 429/);
+});
+
+test('S2b: a second stop click never ends the reaffirmation', async (t) => {
+  const server = fakeCharger({
+    patchPlan: (i) => (i === 0 ? { applyAfter: 9000, answerAfter: 60_000 } : {}),
+  });
+  const ctx = await setup(t, { config: TOKEN_CFG, server });
+  const current = ctx.fire('set-current', '10');
+  await ctx.advance(6 * SECOND);
+  const stop = ctx.fire('stop-charge');
+  await ctx.advance(SECOND);
+  const stop2 = ctx.fire('stop-charge');
+  await ctx.advance(60 * SECOND);
+  assert.match((await current).error, /sans confirmation/);
+  assert.equal((await stop).success, true);
+  assert.equal((await stop2).success, true);
+  assert.equal(ctx.charger.ev.ChargeCurrentLimit, 0, 'the charger ends stopped');
+});
+
+test('S2c: no reaffirmation from the fresh read of a Start, nor while it runs', async (t) => {
+  const server = fakeCharger({
+    patchPlan: (i) => (i === 0 ? { applyAfter: 65_000, answerAfter: 60_000 } : {}),
+  });
+  const ctx = await setup(t, { config: TOKEN_CFG, server });
+  ctx.fire('set-current', '10');
+  await ctx.advance(6 * SECOND);
+  ctx.fire('stop-charge');
+  await ctx.advance(59_400);
+  const before = server.requests.length;
+  const logsBefore = ctx.logs.length;
+  const start = ctx.fire('start-charge');
+  await ctx.advance(SECOND);
+  await start;
+  const sent = server.requests.slice(before).filter((r) => r.method === 'PATCH');
+  assert.ok(
+    sent.every((r) => JSON.parse(r.body).ChargeCurrentLimit !== 0),
+    'no 0 raced the start',
+  );
+  assert.ok(!ctx.logs.slice(logsBefore).some((l) => /came back after a stop/.test(l)));
 });

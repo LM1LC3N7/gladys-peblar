@@ -165,7 +165,7 @@ up to date at the end of every milestone.
 - **"Stop charging" first** (KEBA I1): never refused for a command in flight
   (it goes at once; a second stop shares the first one's outcome); sent once
   more, without a read, when the overtaken command settles (unless a newer
-  command arrived); a start or a current that has not left yet gives way
+  command left); a start or a current that has not left yet gives way
   (refused unsent); never limited to one a minute; sent during a 429 or 5xx
   pause (one request, no read); sent even when the fresh read fails or has
   no time.
@@ -178,8 +178,8 @@ up to date at the end of every milestone.
     the stop left), never by a command refused unsent;
   - I1: a command other than a stop left without confirmation opens a 90 s
     window; a stop sent in it keeps its guard the whole 90 s and, at each
-    read, if the limit read is above 0 and no command left since the stop,
-    sends 0 again (twice at most, logged);
+    polling or follow-up read, if the limit read is above 0 and no start or
+    current left since the stop, sends 0 again (twice at most, logged);
   - I3: only a new address or new credentials restart; an interval change
     reschedules (no new login); a restart resets the login spacing;
     `connected()` lifts a block on new credentials like `configUpdated`;
@@ -194,8 +194,14 @@ up to date at the end of every milestone.
   - M8: the unused `loginBlocked` removed;
   - M9, M10: docs: the token-only ceiling (16 A by default, the charger caps
     itself) and the token and password sent in clear over HTTP on the LAN;
-  - M11: every failure (429, refused credentials, login wait) shows the
-    charger offline.
+  - M11: a failure (refused credentials, login wait, unreachable, 5xx)
+    shows the charger offline; a 429 keeps it online with the 429 pause in
+    the status (approval S21);
+  - approval round 2: only a start or a current that really left after the
+    stop (`lastCurrentAt`) ends its reaffirmation, never a second stop click,
+    which renews it from its own time (S2b); the reaffirmation only comes
+    from the polling and follow-up reads, never from the fresh read of a
+    command nor while a start or a current is in flight (S2c).
 - **Late answers** (KEBA M1/M2, over HTTP): an answer always belongs to its
   request; but a poll read begun before a command left may show the state
   before it: it is quarantined (neither applied, nor published, nor used by
