@@ -61,7 +61,8 @@ export const userConfig = (over = {}) => ({
   LocalRestApiAccessMode: 'ReadWrite',
   LocalRestApiAllowed: true,
   LocalRestApiEnable: true,
-  UserDefinedChargeLimitCurrent: 20,
+  CurrentCtrlFixedChargeCurrentLimit: 20,
+  UserDefinedChargeLimitCurrent: 32,
   ...over,
 });
 
@@ -117,6 +118,32 @@ export function fakeCharger(over = {}) {
       server.requests.push(request);
       if (charger.down) {
         throw new ChargerError(ERROR_KINDS.UNREACHABLE, 'Unreachable: ECONNREFUSED');
+      }
+      if (method === 'PATCH' && charger.patchPlan && headers.Authorization === charger.token) {
+        // `patchPlan(index)` -> { applyAfter, answerAfter } (ms): the PATCH lands
+        // on the charger at applyAfter, whether or when it is answered.
+        const value = JSON.parse(body).ChargeCurrentLimit;
+        const index = server.patches().length - 1;
+        const { applyAfter = 0, answerAfter = 0 } = charger.patchPlan(index) ?? {};
+        const apply = () => {
+          charger.ev.ChargeCurrentLimit = value;
+          if (charger.mirrorUser && value >= 6000) {
+            charger.user.UserDefinedChargeLimitCurrent = value / 1000;
+          }
+        };
+        if (applyAfter > 0) {
+          setTimeout(apply, applyAfter);
+        } else {
+          apply();
+        }
+        if (answerAfter >= timeoutMs) {
+          await wait(timeoutMs);
+          throw new ChargerError(ERROR_KINDS.TIMEOUT, 'Connected but silent: timeout');
+        }
+        if (answerAfter) {
+          await wait(answerAfter);
+        }
+        return answer(200, '');
       }
       const delay = charger.delays[path] ?? charger.delays[method] ?? 0;
       if (charger.silent || delay >= timeoutMs) {

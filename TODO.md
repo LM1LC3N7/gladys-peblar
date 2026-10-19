@@ -25,6 +25,13 @@ up to date at the end of every milestone.
       one current a minute, late reads quarantined, 429/5xx pauses and
       credential blocks persisted, test button, docs en/fr, cover. Tested
       against made-up answers only.
+- [x] **Milestone 1 fixes — review** (2026-10-19): the stop sent again is
+      cancelled only by a command that really left (B1), a stop sent within
+      90 s of an unconfirmed command is reaffirmed (I1), the ceiling reads
+      the installation limit, never the user-defined one (I2), an interval
+      change only reschedules and new credentials or address log in at once
+      (I3), and M1-M11 (see Decisions). Reviewer scenarios S1-S20 in
+      `test/review.test.js`.
 - [ ] **Milestone 2 — real charger**: run against a real Rocksolid (see "To
       check"), turn the answers (anonymized) into fixtures.
 - [ ] **Milestone 3 — more**: several chargers, the websocket of the web API
@@ -51,7 +58,14 @@ up to date at the end of every milestone.
 - Whether two clients (Home Assistant and Gladys) on the same charger
   conflict on `ChargeCurrentLimit` (the last write wins).
 - A late answer: a PATCH that timed out on our side but reaches the charger
-  after a later stop (TCP ordering across two connections).
+  after a later stop (TCP ordering across two connections) — handled by the
+  reaffirmed stop (I1), to confirm.
+- Whether the limit written through the REST API is mirrored into
+  `UserDefinedChargeLimitCurrent` (Home Assistant's number entity suggests
+  so): the reason the ceiling never reads it (I2).
+- Whether the web interface allows one session only: our login (at the start,
+  then once a day) may log the user out of the web interface, or the other
+  way round (M7).
 
 ## Decisions
 
@@ -71,7 +85,7 @@ up to date at the end of every milestone.
   (secret field) logs in to the web API (`POST /api/v1/auth/login`,
   `PersistentSession: false`), keeps the session cookie (its `name=value`
   only, bounded) and reads the token, the user configuration and the system
-  information. Both kept in memory only, never logged, never in `/data`,
+  information (at the start, then every 24 h: M7). Both kept in memory only, never logged, never in `/data`,
   never in a status or an error; the HTTP error bodies are never kept (they
   may echo a secret). The manifest says "kept by Gladys in its database,
   never shown again", never "encrypted" (test). **Never a setting written**
@@ -88,7 +102,7 @@ up to date at the end of every milestone.
   to Gladys never clears a block, a pause, nor the token.
 - **Reads**: system (identity, errors), EV interface, meter every interval,
   one after the other; health (access mode of the token) and, with the
-  password, the web API every hour — a failure of these never blocks the
+  password, the web API every 24 h — a failure of these never blocks the
   main data. 429: pause bounded to 1 min – 6 h (Retry-After, 5 min without);
   5xx: a pause of the failure delay (30 s, 1, 2, 5 min, never under the
   interval); both persisted in `/data`, bounded to 6 h at a restart, applied
@@ -127,8 +141,11 @@ up to date at the end of every milestone.
   lock, the RFID authorization (a toggle), a reboot or an update.
 - **Ceiling** ("courant plafonné au maximum relu", KEBA): the lowest of the
   configured ceiling (`max_current`, 16 A by default, 6–32 A), the
-  user-defined charge limit and the rated current read with the password
-  (each trusted as an integer of 6–80 A). With the token only, the charger
+  installation limit (`CurrentCtrlFixedChargeCurrentLimit`) and the rated
+  current (`HwMaxCurrent`) read with the password (each trusted as an
+  integer of 6–80 A). **Never `UserDefinedChargeLimitCurrent`** (I2): the
+  charger may mirror into it the limit written through the REST API, so the
+  ceiling would ratchet down at each command (6 A after a start). With the token only, the charger
   gives no limit on the REST API: the configured ceiling alone (the charger
   still applies its own installation limit, shown as "limit applied").
 - **Command rules** (lot 6, wave 2/3 lessons, KEBA review): value validated
@@ -150,10 +167,35 @@ up to date at the end of every milestone.
   more, without a read, when the overtaken command settles (unless a newer
   command arrived); a start or a current that has not left yet gives way
   (refused unsent); never limited to one a minute; sent during a 429 or 5xx
-  pause (one request); sent even when the fresh read fails or has no time.
+  pause (one request, no read); sent even when the fresh read fails or has
+  no time.
 - **One current change a minute** (KEBA I3, `TIMINGS.currentMinInterval`),
   start included, counted from the send; a change sooner is refused unsent
   ("Stop charging stays available"). No fine regulation (docs).
+- **Review fixes** (2026-10-19):
+  - B1: the stop sent again (after the command it overtook) is cancelled only
+    when a command really left after it (`lastCommandAt` against the time
+    the stop left), never by a command refused unsent;
+  - I1: a command other than a stop left without confirmation opens a 90 s
+    window; a stop sent in it keeps its guard the whole 90 s and, at each
+    read, if the limit read is above 0 and no command left since the stop,
+    sends 0 again (twice at most, logged);
+  - I3: only a new address or new credentials restart; an interval change
+    reschedules (no new login); a restart resets the login spacing;
+    `connected()` lifts a block on new credentials like `configUpdated`;
+  - M1: a limit under 6 A is "stopped" (state, current refused, start sends);
+  - M2: a stop during a pause is one request (no fresh read);
+  - M3: the stop sent again checks only the serial and the token (turning
+    the option off after an accepted stop never cancels it);
+  - M4: a 403 on a write keeps the token (only a 401 drops it);
+  - M5: a REST API turned off is said before the block message;
+  - M6: a 429 during a cycle (login, health) stops it at once;
+  - M7: the web API at the start, then every 24 h (health stays hourly);
+  - M8: the unused `loginBlocked` removed;
+  - M9, M10: docs: the token-only ceiling (16 A by default, the charger caps
+    itself) and the token and password sent in clear over HTTP on the LAN;
+  - M11: every failure (429, refused credentials, login wait) shows the
+    charger offline.
 - **Late answers** (KEBA M1/M2, over HTTP): an answer always belongs to its
   request; but a poll read begun before a command left may show the state
   before it: it is quarantined (neither applied, nor published, nor used by

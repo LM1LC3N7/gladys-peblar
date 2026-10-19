@@ -130,14 +130,17 @@ export function parseHealth(data) {
 const amperes = (value) =>
   Number.isInteger(value) && value >= 6 && value <= 80 ? value : undefined;
 
-/** GET config/user (web API) -> the user-defined charge limit and the REST API settings. */
+/** GET config/user (web API) -> the installation limit and the REST API settings. */
 export function parseUserConfig(data) {
   if (!plain(data)) {
     throw notObject();
   }
   const mode = own(data, 'LocalRestApiAccessMode');
   return {
-    userMax: amperes(own(data, 'UserDefinedChargeLimitCurrent')),
+    // The installation limit, never UserDefinedChargeLimitCurrent: the charger
+    // may mirror into it the limit written through the REST API, so a bound
+    // read from it would ratchet down at each command.
+    installMax: amperes(own(data, 'CurrentCtrlFixedChargeCurrentLimit')),
     restAllowed: bool(own(data, 'LocalRestApiAllowed')),
     restEnabled: bool(own(data, 'LocalRestApiEnable')),
     restAccessMode: mode === 'ReadWrite' || mode === 'ReadOnly' ? mode : undefined,

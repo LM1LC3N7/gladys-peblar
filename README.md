@@ -24,8 +24,9 @@ Gladys ⇄ SDK ⇄ src/handlers.js ⇄ src/app.js (PeblarApp)
 - **Credentials**: the API token of the local REST API (sent as is in the
   `Authorization` header, as peblar does), or the password of the web
   interface: login (`/api/v1/auth/login`, session cookie), then the token
-  (`/api/v1/config/api-token`), the user configuration and the system
-  information, every hour. Never a setting changed on the charger. A refused
+  (`/api/v1/config/api-token`), the user configuration (installation limit)
+  and the system information, at the start then every 24 h. Plain HTTP: the
+  secrets travel in clear on the LAN. Never a setting changed on the charger. A refused
   token or password blocks the tries for 15 min, 1 h, then 6 h (kept in
   `/data`, no secret in it); a login at most every 10 minutes.
 - **Reads**: `GET /api/wlac/v1/system`, `evinterface`, `meter` every 30 s

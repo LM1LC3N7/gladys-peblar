@@ -57,6 +57,10 @@ const join = (a, b) => both(`${a.en} ${b.en}`, `${a.fr} ${b.fr}`);
 
 /** No login allowed yet (the last one is too recent): never a loop of logins. */
 const LOGIN_WAIT = 'login_wait';
+/** A pause began in this cycle: it stops at once. */
+const PAUSED = 'paused';
+/** A limit below 6 A: the charge is stopped (0, or a value no vehicle accepts). */
+const STOPPED_BELOW = CURRENT.min * 1000;
 
 const freshCharger = () => ({
   serial: undefined,
@@ -65,7 +69,7 @@ const freshCharger = () => ({
   model: undefined,
   vendor: undefined,
   hardwareMax: undefined,
-  userMax: undefined,
+  installMax: undefined,
   restEnabled: undefined,
   accessMode: undefined,
   ev: undefined,
@@ -80,8 +84,12 @@ const freshCharger = () => ({
   followUps: new Set(),
   healthAt: -Infinity,
   webAt: -Infinity,
-  /** When the last command left (a read begun before it is quarantined). */
+  /** When the last request that writes left, resends included (a read begun before it is quarantined). */
   lastSentAt: -Infinity,
+  /** When the last command of a user left (resends of a stop excluded). */
+  lastCommandAt: -Infinity,
+  /** Until then, a command not confirmed may still land (a stop sent meanwhile is reaffirmed). */
+  unconfirmedUntil: -Infinity,
   /** When the last current change (start included) left: one a minute. */
   lastCurrentAt: -Infinity,
   /** The last limit seen above 0, in whole amperes: what a start sends again. */
@@ -118,11 +126,8 @@ export class PeblarApp {
     this.token = undefined;
     this.cookie = undefined;
     this.lastLoginAt = -Infinity;
-    this.loginBlocked = false;
-    /** The command in flight: { role, seq, overtaken, again, promise } (a stop aside). */
+    /** The command in flight: { role, sentAt, overtaken, again, promise } (a stop aside). */
     this.inFlight = undefined;
-    /** Commands arrived (a newer one cancels a stop sent again). */
-    this.commandCount = 0;
     /** `${serial}:limit` -> { from, expected, moved, until }: a command sent, not seen yet. */
     this.guards = new Map();
   }
@@ -141,7 +146,8 @@ export class PeblarApp {
     this.charger = freshCharger();
     this.token = undefined;
     this.cookie = undefined;
-    this.loginBlocked = false;
+    // Restarted for a new address or new credentials: they may log in at once.
+    this.lastLoginAt = -Infinity;
     this.published = undefined;
     this.badge = undefined;
     this.lastStatus = undefined;
@@ -183,43 +189,66 @@ export class PeblarApp {
       await this.start(raw);
       return;
     }
+    await this.liftBlockOnNewCredentials(raw);
     if (this.needsRestart(raw)) {
       await this.start(raw);
       return;
     }
+    const previous = this.config;
     this.config = normalizeConfig(raw);
     this.published = undefined;
     this.badge = undefined;
     this.lastStatus = undefined;
+    this.rescheduleOnNewInterval(previous);
     await this.publishAll();
   }
 
+  /** Only a new address or new credentials restart (an interval only reschedules). */
   needsRestart(raw) {
     const next = normalizeConfig(raw);
     return (
-      next.pollInterval !== this.config.pollInterval ||
       JSON.stringify(next.address ?? null) !== JSON.stringify(this.config.address ?? null) ||
       next.invalidHost !== this.config.invalidHost ||
       credentialsKey(next) !== credentialsKey(this.config)
     );
   }
 
-  /**
-   * New address, credentials or interval restart (new credentials lift a
-   * block at once); the option, the ceiling and the language apply at once.
-   */
-  async configUpdated(raw = {}) {
-    const next = normalizeConfig(raw);
-    if (credentialsKey(next) !== credentialsKey(this.config) && this.memory.block) {
+  /** New credentials saved (or given at a reconnection) lift a block at once. */
+  async liftBlockOnNewCredentials(raw) {
+    if (credentialsKey(normalizeConfig(raw)) !== credentialsKey(this.config) && this.memory.block) {
       this.memory.block = null;
       await this.saveMemory();
     }
+  }
+
+  /** A new interval: the next read follows it, without a restart (no new login). */
+  rescheduleOnNewInterval(previous) {
+    const c = this.charger;
+    if (
+      this.config.pollInterval !== previous.pollInterval &&
+      this.config.address &&
+      this.config.auth &&
+      !c.running &&
+      c.online !== false
+    ) {
+      this.schedule();
+    }
+  }
+
+  /**
+   * New address or credentials restart (new credentials lift a block at
+   * once); the interval, the option, the ceiling and the language apply at
+   * once.
+   */
+  async configUpdated(raw = {}) {
+    await this.liftBlockOnNewCredentials(raw);
     if (this.needsRestart(raw)) {
       await this.start(raw);
       return;
     }
     const previous = this.config;
-    this.config = next;
+    this.config = normalizeConfig(raw);
+    this.rescheduleOnNewInterval(previous);
     if (this.config.allowCommands !== previous.allowCommands) {
       this.logger.info(`Peblar commands ${this.config.allowCommands ? 'allowed' : 'disabled'}`);
     }
@@ -298,7 +327,6 @@ export class PeblarApp {
       err.login = true;
       throw err;
     }
-    this.loginBlocked = false;
     this.logger.info('Peblar: logged in, API token read');
     await this.readWeb();
     return this.token;
@@ -321,7 +349,7 @@ export class PeblarApp {
         PATHS.web.user,
         parseUserConfig,
         (u) => {
-          c.userMax = u.userMax;
+          c.installMax = u.installMax;
           c.restEnabled = u.restAllowed === false ? false : u.restEnabled;
         },
       ],
@@ -426,6 +454,13 @@ export class PeblarApp {
     let delay;
     try {
       const token = await this.credential();
+      if (generation !== this.generation) {
+        return;
+      }
+      if (this.paused) {
+        // A 429 during the login: nothing more in this cycle.
+        throw Object.assign(new Error('Paused'), { kind: PAUSED });
+      }
       const startedAt = this.now();
       const read = await this.readRest(token);
       if (generation !== this.generation) {
@@ -465,7 +500,7 @@ export class PeblarApp {
     return { system, ev, meter };
   }
 
-  /** Health (access mode of the token) and the web API, every hour; never blocking. */
+  /** Health (access mode of the token) every hour, the web API every 24 h; never blocking. */
   async readSlow(token) {
     const c = this.charger;
     if (this.now() - c.healthAt >= TIMINGS.slowRefresh) {
@@ -484,7 +519,11 @@ export class PeblarApp {
         this.logger.warn(`Peblar health: ${errorReason(err)}`);
       }
     }
-    if (this.config.auth.mode === 'password' && this.now() - c.webAt >= TIMINGS.slowRefresh) {
+    if (this.paused) {
+      // A 429 just now: nothing more in this cycle.
+      return;
+    }
+    if (this.config.auth.mode === 'password' && this.now() - c.webAt >= TIMINGS.webRefresh) {
       if (!this.cookie && this.loginAllowed) {
         this.lastLoginAt = this.now();
         try {
@@ -520,7 +559,7 @@ export class PeblarApp {
       this.logger.warn('Peblar: another charger answers at this address');
       Object.assign(c, {
         hardwareMax: undefined,
-        userMax: undefined,
+        installMax: undefined,
         model: undefined,
         lastAmps: undefined,
         healthAt: -Infinity,
@@ -550,6 +589,24 @@ export class PeblarApp {
   async failed(err) {
     const c = this.charger;
     const reason = errorReason(err);
+    if (err.kind === PAUSED) {
+      return undefined;
+    }
+    if (
+      err.kind === ERROR_KINDS.AUTH &&
+      this.config.auth.mode === 'password' &&
+      !err.login &&
+      this.loginAllowed
+    ) {
+      // The token got with the password expired (the charger restarted): one
+      // new login, now (at most one every 10 minutes).
+      this.token = undefined;
+      this.cookie = undefined;
+      this.logger.info('Peblar: API token refused, logging in again');
+      return 0;
+    }
+    // Any other failure: the charger is not read (offline states, badge).
+    c.online = false;
     if (err.kind === LOGIN_WAIT) {
       c.error = LOGIN_WAIT;
       return Math.max(this.interval, TIMINGS.loginMinInterval - (this.now() - this.lastLoginAt));
@@ -559,17 +616,9 @@ export class PeblarApp {
         await this.authFailed('token');
         return undefined;
       }
-      if (err.login || !this.loginAllowed) {
-        // The password refused, or a token refused right after a login.
-        await this.authFailed('password');
-        return undefined;
-      }
-      // The token got with the password expired (the charger restarted): one
-      // new login, now (at most one every 10 minutes).
-      this.token = undefined;
-      this.cookie = undefined;
-      this.logger.info('Peblar: API token refused, logging in again');
-      return 0;
+      // The password refused, or a token refused right after a login.
+      await this.authFailed('password');
+      return undefined;
     }
     if (err.kind === ERROR_KINDS.RATE_LIMITED) {
       await this.pause(err);
@@ -617,7 +666,7 @@ export class PeblarApp {
   /** The highest current the commands accept now. */
   get ceiling() {
     const c = this.charger;
-    return Math.min(this.config.maxCurrent, c.userMax ?? Infinity, c.hardwareMax ?? Infinity);
+    return Math.min(this.config.maxCurrent, c.installMax ?? Infinity, c.hardwareMax ?? Infinity);
   }
 
   summary() {
@@ -648,10 +697,10 @@ export class PeblarApp {
     }
     if (this.blocked) {
       const wait = age(this.memory.block.until - this.now());
-      return [
-        false,
-        this.memory.block.mode === 'token' ? T.tokenRefused(wait) : T.passwordRefused(wait),
-      ];
+      const refused =
+        this.memory.block.mode === 'token' ? T.tokenRefused(wait) : T.passwordRefused(wait);
+      // The REST API turned off is the likely cause of a refused token: said first.
+      return [false, c.restEnabled === false ? join(T.restDisabled, refused) : refused];
     }
     if (c.error === LOGIN_WAIT) {
       return [false, T.loginWait(age(TIMINGS.loginMinInterval - (this.now() - this.lastLoginAt)))];
@@ -919,9 +968,6 @@ export class PeblarApp {
       // A stop already under way: this one shares its outcome.
       return previous.promise;
     }
-    // Counted even when refused just below: a newer command cancels a stop sent again.
-    this.commandCount += 1;
-    const seq = this.commandCount;
     // One command at a time: a busy charger refuses at once, but a stop is
     // never held back: it goes now, and once more when the other one settles.
     if (previous && role !== FEATURES.STOP) {
@@ -929,7 +975,7 @@ export class PeblarApp {
     }
     const entry = {
       role,
-      seq,
+      sentAt: undefined,
       overtaken: previous?.promise,
       again: undefined,
       promise: undefined,
@@ -989,7 +1035,7 @@ export class PeblarApp {
     const guarded = this.guardActive(serial);
     if (role === FEATURES.STOP) {
       // A command still in flight is pending too: never "already stopped" over it.
-      if (ev?.limit === 0 && !guarded && !entry.overtaken) {
+      if (ev?.limit === 0 && !guarded && !entry.overtaken && !this.unconfirmed) {
         return undefined;
       }
       return { limit: 0, from: ev?.limit };
@@ -1005,7 +1051,7 @@ export class PeblarApp {
       if (![STATE.SUSPENDED, STATE.CHARGING, STATE.VENTILATION].includes(ev.state)) {
         throw this.refusal(ERRORS.fault(STATE_NAMES[ev.state] ?? STATE_NAMES[STATE.UNKNOWN]));
       }
-      if (ev.limit > 0 && !guarded) {
+      if (ev.limit >= STOPPED_BELOW && !guarded) {
         return undefined;
       }
       const amps = Math.max(
@@ -1018,7 +1064,7 @@ export class PeblarApp {
       throw this.refusal(ERRORS.outOfBounds(CURRENT.min, ceiling));
     }
     const guard = this.guards.get(`${serial}:limit`);
-    if (ev.limit === 0 && !(guarded && guard.expected > 0)) {
+    if (ev.limit < STOPPED_BELOW && !(guarded && guard.expected >= STOPPED_BELOW)) {
       // A current while stopped would start the charge again: Start does that.
       throw this.refusal(ERRORS.stopped);
     }
@@ -1043,7 +1089,8 @@ export class PeblarApp {
       TIMINGS.commandReadMax,
       sendBy - TIMINGS.commandMinSend - this.now(),
     );
-    if (readBudget >= TIMINGS.commandMinRead) {
+    // During a pause, a stop is one request: no fresh read.
+    if (readBudget >= TIMINGS.commandMinRead && !(isStop && this.paused)) {
       const readStart = this.now();
       try {
         fresh = parseEvInterface(
@@ -1089,6 +1136,8 @@ export class PeblarApp {
     const timeoutMs = Math.max(200, received + TIMINGS.commandAnswerBy - this.now());
     const previousCurrentAt = c.lastCurrentAt;
     c.lastSentAt = this.now();
+    c.lastCommandAt = this.now();
+    entry.sentAt = this.now();
     if (!isStop) {
       c.lastCurrentAt = this.now();
     }
@@ -1112,8 +1161,9 @@ export class PeblarApp {
         throw this.refusal(ERRORS.refused(reason));
       }
       if (err.kind === ERROR_KINDS.AUTH) {
-        if (this.config.auth.mode === 'password') {
-          // The next read logs in again.
+        if (this.config.auth.mode === 'password' && err.status === 401) {
+          // The token expired: the next read logs in again. A 403 (a write
+          // refused) keeps it: a stop must stay possible.
           this.token = undefined;
         }
         this.followUp();
@@ -1125,12 +1175,17 @@ export class PeblarApp {
       }
       // A 5xx, a silence, a broken answer or any other error after the
       // transport started: it may have reached the charger.
-      this.guard(serial, plan);
+      if (!isStop) {
+        // It may still land later, even after a stop: a stop sent within
+        // the next 90 s is reaffirmed if a read shows a current again.
+        c.unconfirmedUntil = this.now() + TIMINGS.guard;
+      }
+      this.guard(serial, plan, isStop && this.unconfirmed ? entry.sentAt : undefined);
       this.followUp();
       this.stopAgain(serial, entry, plan);
       throw this.refusal(ERRORS.sentUnconfirmed(reason));
     }
-    this.guard(serial, plan);
+    this.guard(serial, plan, isStop && this.unconfirmed ? entry.sentAt : undefined);
     this.followUp();
     this.stopAgain(serial, entry, plan);
   }
@@ -1144,17 +1199,15 @@ export class PeblarApp {
     if (!entry.overtaken || plan.limit !== 0) {
       return;
     }
-    const generation = this.generation;
     // Kept in entry.again: the stop holds the charger (inFlight) until it ends.
     entry.again = entry.overtaken
       .catch(() => {})
       .then(async () => {
-        if (generation !== this.generation || !this.config.allowCommands) {
-          return;
-        }
-        if (this.commandCount !== entry.seq) {
-          // A newer command arrived since this stop: its intent wins.
-          this.logger.info('Peblar: stop not sent again (newer command)');
+        // Only the charger and the token are checked: the stop was accepted,
+        // turning the option off since never cancels it.
+        if (this.charger.lastCommandAt > entry.sentAt) {
+          // A newer command really left since this stop: its intent wins.
+          this.logger.info('Peblar: stop not sent again (newer command sent)');
           return;
         }
         const token = this.currentToken();
@@ -1167,7 +1220,7 @@ export class PeblarApp {
           startBy: Infinity,
           timeoutMs: TIMINGS.readTimeout,
         });
-        this.guard(serial, plan);
+        this.guard(serial, plan, this.unconfirmed ? entry.sentAt : undefined);
       })
       .catch(async (err) => {
         this.logger.warn(`Peblar: stop again failed (${errorReason(err)})`);
@@ -1199,18 +1252,31 @@ export class PeblarApp {
 
   // --- Guard -----------------------------------------------------------------------
 
+  /** A command not confirmed may still land on the charger. */
+  get unconfirmed() {
+    return this.now() < this.charger.unconfirmedUntil;
+  }
+
   /**
    * After a command, until the charger shows it: a new command is always
    * sent, never answered "already so" on a state that may not show the
    * previous one yet. The start state is kept: a read equal to it lifts
-   * nothing until a move was seen.
+   * nothing until a move was seen. `reassertFrom`: a stop sent while another
+   * command was not confirmed (the time it left): its guard holds the whole
+   * 90 s and reaffirms the stop (see observe).
    */
-  guard(serial, plan) {
-    this.guards.set(`${serial}:limit`, {
+  guard(serial, plan, reassertFrom) {
+    const key = `${serial}:limit`;
+    const held = this.guards.get(key);
+    // A stop sent again keeps the reaffirmation of the stop it repeats.
+    const keep = held?.reassertFrom !== undefined && plan.limit === 0 && this.guardActive(serial);
+    this.guards.set(key, {
       from: plan.from,
       expected: plan.limit,
       moved: false,
-      until: this.now() + TIMINGS.guard,
+      until: keep ? held.until : this.now() + TIMINGS.guard,
+      reassertFrom: keep ? held.reassertFrom : reassertFrom,
+      reasserts: keep ? held.reasserts : 0,
     });
   }
 
@@ -1234,8 +1300,45 @@ export class PeblarApp {
     if (limit !== guard.from) {
       guard.moved = true;
     }
+    if (guard.reassertFrom !== undefined) {
+      // A stop to reaffirm: the guard holds its 90 s. A current read again
+      // while no command left since the stop is a late command landing
+      // after it: the stop is sent again, twice at most.
+      if (
+        limit > 0 &&
+        this.charger.lastCommandAt <= guard.reassertFrom &&
+        guard.reasserts < TIMINGS.stopReasserts
+      ) {
+        guard.reasserts += 1;
+        this.reassertStop(serial);
+      }
+      return;
+    }
     if (guard.moved && limit === guard.expected) {
       this.guards.delete(key);
     }
+  }
+
+  /** Sends the stop again (a late command landed after it). No read, no option check. */
+  reassertStop(serial) {
+    const token = this.currentToken();
+    if (!token || this.charger.serial !== serial) {
+      return;
+    }
+    this.logger.warn('Peblar: a current came back after a stop, stop sent again');
+    this.charger.lastSentAt = this.now();
+    this.client
+      .setLimit(this.config.address, token, 0, {
+        startBy: Infinity,
+        timeoutMs: TIMINGS.readTimeout,
+      })
+      .then(() => this.followUp())
+      .catch(async (err) => {
+        this.logger.warn(`Peblar: stop reaffirmed failed (${errorReason(err)})`);
+        if (err.kind === ERROR_KINDS.RATE_LIMITED) {
+          await this.pause(err);
+        }
+      })
+      .catch(() => {});
   }
 }

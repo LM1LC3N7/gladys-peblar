@@ -49,15 +49,18 @@ publiée, et un total de 0 n'est jamais publié.
    saisissez l'**adresse IP de la borne** et le **jeton d'API**.
    - À la place du jeton, vous pouvez donner le **mot de passe de
      l'interface web** : l'intégration se connecte alors pour lire le jeton
-     (l'API REST locale doit quand même être activée), la limite de charge
-     définie par l'utilisateur et le courant nominal de la borne. Elle ne
-     change jamais un réglage de la borne.
+     (l'API REST locale doit quand même être activée), la limite de
+     l'installation et le courant nominal de la borne, au démarrage puis une
+     fois par jour. Elle ne change jamais un réglage de la borne.
 4. Enregistrez, puis ajoutez la borne depuis l'onglet **Découverte**.
 
 Le jeton et le mot de passe sont **gardés par Gladys dans sa base, jamais
 réaffichés**, et envoyés seulement à la borne (le jeton dans l'en-tête
 `Authorization`). Ils ne sont jamais écrits dans les journaux, ni dans
-`/data`, ni dans un état.
+`/data`, ni dans un état. La borne ne parle qu'en HTTP simple : le jeton et le
+mot de passe passent **en clair, en HTTP** sur votre réseau local (comme avec
+l'interface web de la borne elle-même). Gardez la borne sur un réseau de
+confiance.
 
 Le bouton **Tester la connexion** lit la borne une fois (au plus toutes les
 10 secondes).
@@ -75,9 +78,13 @@ désactivé. Activé :
   erreur, un défaut ou un état inconnu ;
 - **Courant de charge** : de 6 A au **plafond** : le « Plafond du courant de
   charge » de la configuration (16 A par défaut, 32 A au plus), et avec le
-  mot de passe aussi la limite définie par l'utilisateur et le courant
-  nominal lus sur la borne (le plus bas l'emporte). Refusé tant que la charge
-  est arrêtée (cela la relancerait : utilisez Démarrer). **Un changement par
+  mot de passe aussi la limite de l'installation et le courant nominal lus
+  sur la borne (le plus bas l'emporte). Avec le **jeton seul**, la borne ne
+  donne aucune limite à l'intégration : le plafond est celui de la
+  configuration seul (16 A par défaut), et la borne bride quand même le
+  courant à ses limites d'installation et de câble (montrées dans « Limite de
+  courant appliquée »). Refusé tant que la charge est arrêtée (une limite
+  sous 6 A : cela la relancerait : utilisez Démarrer). **Un changement par
   minute au plus** (démarrage compris) : pas de régulation fine depuis
   Gladys.
 
@@ -98,8 +105,12 @@ commande à la fois : une autre est refusée aussitôt, **sauf « Arrêter la
 charge », jamais retenu** : il part tout de suite, même pendant une autre
 commande (il est alors renvoyé une fois quand elle se termine, et un
 démarrage ou un courant pas encore envoyé lui cède la place), même dans la
-minute entre deux courants, même pendant une pause 429, et même quand la
-lecture juste avant échoue.
+minute entre deux courants, même pendant une pause 429 (alors une seule
+requête, sans relecture), et même quand la lecture juste avant échoue. Quand
+une commande est restée sans confirmation, elle peut encore atteindre la borne
+plus tard : un arrêt envoyé dans les 90 secondes qui suivent est surveillé, et
+renvoyé (deux fois au plus) si une lecture montre de nouveau un courant alors
+qu'aucune autre commande n'est partie.
 
 Un jeton en **lecture seule** (mode d'accès de l'API REST locale) refuse
 toute commande ; l'état de l'intégration le signale.

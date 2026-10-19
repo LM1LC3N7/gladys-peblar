@@ -47,13 +47,17 @@ daily consumption is published, and a total of 0 is never published.
    the **IP address of the charger** and the **API token**.
    - Instead of the token, you may give the **password of the web
      interface**: the integration then logs in to read the token (the local
-     REST API must still be on), the user-defined charge limit and the rated
-     current of the charger. It never changes a setting of the charger.
+     REST API must still be on), the installation limit and the rated current
+     of the charger, at the start then once a day. It never changes a setting
+     of the charger.
 4. Save, then add the charger from the **Discovery** tab.
 
 The token and the password are **kept by Gladys in its database, never shown
 again**, and sent only to the charger (the token in the `Authorization`
 header). They are never written in the logs, nor in `/data`, nor in a status.
+The charger only speaks plain HTTP: the token and the password travel **in
+clear, over HTTP** on your local network (as with the web interface of the
+charger itself). Keep the charger on a network you trust.
 
 The **Test the connection** button reads the charger once (at most every 10
 seconds).
@@ -69,9 +73,13 @@ command while **Allow the commands** is off. On:
   error, a fault or an unknown state;
 - **Charging current**: from 6 A to the **ceiling**: the "Ceiling of the
   charging current" of the configuration (16 A by default, 32 A at most), and
-  with the password also the user-defined charge limit and the rated current
-  read from the charger (the lowest wins). Refused while the charge is
-  stopped (it would start it again: use Start). **One change a minute at
+  with the password also the installation limit and the rated current read
+  from the charger (the lowest wins). With the **token only**, the charger
+  gives no limit to the integration: the ceiling is the configured one alone
+  (16 A by default), and the charger still caps the current itself at its
+  installation and cable limits (shown as "Current limit applied"). Refused
+  while the charge is stopped (a limit under 6 A: it would start it again:
+  use Start). **One change a minute at
   most** (start included): no fine regulation from Gladys.
 
 They are **buttons** and a **list**, never switches: a "turn everything off"
@@ -90,7 +98,11 @@ another one is refused at once, **except "Stop charging", never held back**:
 it goes at once, even while another command is in flight (it is then sent
 once more when that command ends, and any start or current not sent yet gives
 way to it), even within the minute between two currents, even during a 429
-pause, and even when the read just before fails.
+pause (then a single request, without the read), and even when the read
+just before fails. When a command stayed without confirmation, it may still
+reach the charger later: a stop sent within the next 90 seconds is watched,
+and sent again (twice at most) if a read shows a current again while no other
+command left.
 
 A token in **read only** mode (access mode of the local REST API) refuses
 every command; the status says so.

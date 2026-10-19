@@ -9,7 +9,7 @@
 //     CP state), system (serial, errors), health (access mode);
 //   - the web interface API, `/api/v1/`, behind the password of the web
 //     interface (a session cookie): the API token, the user configuration
-//     (user-defined charge limit) and the system information (rated current).
+//     (installation limit) and the system information (rated current).
 // Starting and stopping the charge, and the charging current, all go through
 // one field: `ChargeCurrentLimit` of the EV interface, in mA (0 pauses the
 // charge, as Home Assistant's "Charge" switch does).
@@ -36,7 +36,7 @@ export const PATHS = {
  * The charging current, in whole amperes: never below 6 A (IEC 61851, the
  * lowest current a vehicle accepts), never above the ceiling of the
  * configuration (16 A by default, 32 A at most) nor the limits the charger
- * gives when the password is known (user-defined charge limit, rated
+ * gives when the password is known (installation limit, rated
  * current). 0 is never a current: it is "stop".
  */
 export const CURRENT = {
@@ -153,8 +153,10 @@ export const TIMINGS = {
   authBackoff: [15 * MINUTE, HOUR, 6 * HOUR],
   /** A login (password) at most this often, whatever happens. */
   loginMinInterval: 10 * MINUTE,
-  /** Health, user configuration and system information: read again every hour. */
+  /** Health (access mode of the token): read again every hour. */
   slowRefresh: HOUR,
+  /** User configuration and system information (web API, a login): at the start, then every 24 h. */
+  webRefresh: 24 * HOUR,
   /** The publisher sends what is pending every second; unchanged states again every 30 min. */
   flushInterval: SECOND,
   stateHeartbeat: 30 * MINUTE,
@@ -176,6 +178,8 @@ export const TIMINGS = {
   followUps: [5 * SECOND, 20 * SECOND],
   /** A sent command keeps its guard until the limit moves to what it asked, or 90 s. */
   guard: 90 * SECOND,
+  /** A stop reaffirmed at most this often while its guard holds (a late command landing after it). */
+  stopReasserts: 2,
   /** One change of the charging current (start included) a minute; a stop is never limited. */
   currentMinInterval: MINUTE,
 };

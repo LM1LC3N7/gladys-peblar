@@ -43,8 +43,13 @@ test('hostile answers: wrong types are undefined, never a default', () => {
       (err) => err.kind === ERROR_KINDS.PROTOCOL,
     );
   }
-  assert.equal(parseUserConfig({ UserDefinedChargeLimitCurrent: 5 }).userMax, undefined);
-  assert.equal(parseUserConfig({ UserDefinedChargeLimitCurrent: 20 }).userMax, 20);
+  assert.equal(parseUserConfig({ CurrentCtrlFixedChargeCurrentLimit: 5 }).installMax, undefined);
+  assert.equal(parseUserConfig({ CurrentCtrlFixedChargeCurrentLimit: 20 }).installMax, 20);
+  assert.equal(
+    parseUserConfig({ UserDefinedChargeLimitCurrent: 10 }).installMax,
+    undefined,
+    'never the user-defined limit (it may mirror the REST limit)',
+  );
 });
 
 test('serials, tokens, cookies', () => {

@@ -222,6 +222,9 @@ export function buildDevice(gladys, charger, { ceiling, language }) {
   };
 }
 
+/** A limit below 6 A stops the charge (0, or a value no vehicle accepts). */
+export const stopped = (ev) => ev?.limit !== undefined && ev.limit < CURRENT.min * 1000;
+
 /** The connector, as the core's charging-station category reads it (undefined: unknown). */
 export function connectorOf(state) {
   switch (state) {
@@ -251,7 +254,7 @@ export function chargingStateOf(ev) {
     case STATE.VENTILATION:
       return CHARGING_STATE.CHARGING;
     case STATE.SUSPENDED:
-      return ev.limit === 0 ? CHARGING_STATE.PAUSED_BY_CHARGER : CHARGING_STATE.EV_CONNECTED;
+      return stopped(ev) ? CHARGING_STATE.PAUSED_BY_CHARGER : CHARGING_STATE.EV_CONNECTED;
     case STATE.NO_EV:
     case STATE.ERROR:
     case STATE.FAULT:
@@ -263,7 +266,7 @@ export function chargingStateOf(ev) {
 
 /** The text of the status feature. */
 export function statusText(ev) {
-  if (ev?.state === STATE.SUSPENDED && ev.limit === 0) {
+  if (ev?.state === STATE.SUSPENDED && stopped(ev)) {
     return STOPPED;
   }
   return STATE_NAMES[ev?.state] ?? STATE_NAMES[STATE.UNKNOWN];
