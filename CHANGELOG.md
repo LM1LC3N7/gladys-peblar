@@ -10,6 +10,8 @@ the notes of the version's GitHub Release.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-19
+
 ### Added
 
 - Peblar chargers read over their local REST API (no cloud), with the API
@@ -37,4 +39,5 @@ the notes of the version's GitHub Release.
 - "Test the connection" button; documentation in English and French;
   `LICENSE` and `THIRD_PARTY_NOTICES.md` shipped in the image.
 
-[Unreleased]: https://github.com/LM1LC3N7/gladys-peblar/commits/main
+[Unreleased]: https://github.com/LM1LC3N7/gladys-peblar/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/LM1LC3N7/gladys-peblar/releases/tag/v0.1.1
