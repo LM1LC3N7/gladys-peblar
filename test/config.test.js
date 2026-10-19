@@ -1,33 +1,66 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeConfig, DEFAULT_CONFIG } from '../src/config.js';
+import { credentialsKey, normalizeConfig, parseAddress } from '../src/config.js';
 
-test('normalizeConfig returns the defaults when called with no argument', () => {
-  assert.deepEqual(normalizeConfig(), DEFAULT_CONFIG);
+test('addresses: IPv4, host names, ports, pasted URLs', () => {
+  assert.deepEqual(parseAddress('192.168.1.60'), { host: '192.168.1.60', port: 80 });
+  assert.deepEqual(parseAddress(' http://Peblar.local:8080/api '), {
+    host: 'peblar.local',
+    port: 8080,
+  });
+  for (const bad of ['', '1.2.3', '999.1.1.1', 'a b', 'host:0', 'host:70000', '-x.local']) {
+    assert.equal(parseAddress(bad), undefined, bad);
+  }
 });
 
-test('normalizeConfig keeps user values over the defaults', () => {
-  const config = normalizeConfig({ latitude: 45.5, longitude: -73.6, unit: 'fahrenheit' });
-  assert.equal(config.latitude, 45.5);
-  assert.equal(config.longitude, -73.6);
-  assert.equal(config.unit, 'fahrenheit');
+test('defaults: commands off, 16 A ceiling, 30 s, French', () => {
+  const c = normalizeConfig();
+  assert.equal(c.address, undefined);
+  assert.equal(c.auth, undefined);
+  assert.equal(c.allowCommands, false);
+  assert.equal(c.maxCurrent, 16);
+  assert.equal(c.pollInterval, 30);
+  assert.equal(c.language, 'fr');
 });
 
-test('normalizeConfig coerces numeric strings coming from a form', () => {
-  const config = normalizeConfig({ latitude: '48.8', longitude: '2.3', poll_frequency: '600' });
-  assert.equal(config.latitude, 48.8);
-  assert.equal(config.longitude, 2.3);
-  assert.equal(config.poll_frequency, 600);
-  assert.equal(typeof config.poll_frequency, 'number');
+test('only true allows the commands', () => {
+  for (const value of [false, 'false', 1, 'yes', 'TRUE', null, undefined]) {
+    assert.equal(normalizeConfig({ allow_commands: value }).allowCommands, false, String(value));
+  }
+  assert.equal(normalizeConfig({ allow_commands: true }).allowCommands, true);
+  assert.equal(normalizeConfig({ allow_commands: 'true' }).allowCommands, true);
 });
 
-test('normalizeConfig falls back to the default for a missing numeric field', () => {
-  const config = normalizeConfig({ unit: 'celsius' });
-  assert.equal(config.poll_frequency, DEFAULT_CONFIG.poll_frequency);
+test('the token wins over the password; bad secrets are refused', () => {
+  assert.deepEqual(normalizeConfig({ api_token: ' tok ', password: 'pw' }).auth, {
+    mode: 'token',
+    token: 'tok',
+  });
+  assert.deepEqual(normalizeConfig({ password: 'pw' }).auth, { mode: 'password', password: 'pw' });
+  const bad = normalizeConfig({ api_token: 'é'.repeat(3) });
+  assert.equal(bad.auth, undefined);
+  assert.equal(bad.badSecret, true);
+  assert.equal(normalizeConfig({ api_token: 'x'.repeat(257) }).auth, undefined);
+  assert.notEqual(
+    credentialsKey(normalizeConfig({ password: 'a' })),
+    credentialsKey(normalizeConfig({ password: 'b' })),
+  );
 });
 
-test('GLADYS_PREFER_LOCAL defaults to true and only an explicit false disables it', () => {
-  assert.equal(normalizeConfig().GLADYS_PREFER_LOCAL, true);
-  assert.equal(normalizeConfig({ GLADYS_PREFER_LOCAL: true }).GLADYS_PREFER_LOCAL, true);
-  assert.equal(normalizeConfig({ GLADYS_PREFER_LOCAL: false }).GLADYS_PREFER_LOCAL, false);
+test('bounds: ceiling 6..32 A (whole amperes, rounded down), interval 10..600 s', () => {
+  assert.equal(normalizeConfig({ max_current: 40 }).maxCurrent, 32);
+  assert.equal(normalizeConfig({ max_current: 2 }).maxCurrent, 6);
+  assert.equal(normalizeConfig({ max_current: '20.9' }).maxCurrent, 20);
+  assert.equal(normalizeConfig({ max_current: '' }).maxCurrent, 16);
+  assert.equal(normalizeConfig({ poll_interval: 1 }).pollInterval, 10);
+  assert.equal(normalizeConfig({ poll_interval: 'x' }).pollInterval, 30);
+});
+
+test('only known keys are read', () => {
+  const c = normalizeConfig(
+    JSON.parse('{"__proto__": {"allow_commands": true}, "host": "10.0.0.2"}'),
+  );
+  assert.equal(c.allowCommands, false);
+  assert.equal({}.allow_commands, undefined);
+  assert.equal(c.address.host, '10.0.0.2');
 });

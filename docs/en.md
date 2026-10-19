@@ -1,61 +1,121 @@
-# Demo Devices Template
+# Peblar for Gladys
 
-This is the user documentation of the integration. Gladys re-hosts this file
-and shows a permanent **Documentation** link to it in the Configuration screen
-(in the user's language, with English as the fallback) — it is when
-configuring that the user needs it most. Keep the short onboarding hints in
-the `section` blocks of the manifest `config_schema`; put the long
-step-by-step (screenshots, troubleshooting…) here.
+Shows your **Peblar** EV charger (Rocksolid, Business) in Gladys through its
+**local REST API**: no cloud, no account, straight on your network.
+
+> **Never tested with a real charger.** Not affiliated with Peblar. The
+> integration talks to the charger like the peblar library (used by Home
+> Assistant). Peblar may change its API with a firmware update.
 
 ## What you get
 
-Six demo devices show up after installation: a weather station (real data
-from Open-Meteo), a switch, a dimmable light, a smart plug with power
-metering, a motion sensor and a camera.
+One device per charger with:
 
-## Configuration
+| Feature                       | Content                                                                 |
+| ----------------------------- | ----------------------------------------------------------------------- |
+| Status                        | No vehicle, plugged in waiting, charge stopped, charging, error, fault  |
+| Connector                     | Available, occupied, faulted or unavailable (Gladys "charging station") |
+| Charging state                | Charging, vehicle connected, paused by the charger, idle                |
+| Vehicle plugged in            | Yes / no                                                                |
+| Power, and power L1 / L2 / L3 | In W                                                                    |
+| Current L1 / L2 / L3          | In A                                                                    |
+| Voltage L1 / L2 / L3          | In V (a phase the charger does not measure stays empty)                 |
+| Energy of the session         | In kWh, a plain sensor                                                  |
+| Total energy                  | In kWh, a plain sensor                                                  |
+| Charge current limit          | In A: the limit asked through the local REST API (0 = charge stopped)   |
+| Current limit applied         | In A: what the charger really allows (cable, load balancing, solar...)  |
+| Limited by                    | What sets the applied limit (text of the charger)                       |
+| Error / warning reported      | Yes / no                                                                |
+| Forced single phase           | Yes / no (read only)                                                    |
+| Start charging, Stop charging | Buttons (commands allowed only)                                         |
+| Set the charging current      | List from 6 A to the ceiling (commands allowed only)                    |
 
-1. Open the **Configuration** tab of the integration.
-2. Set the **latitude** and **longitude** the demo weather station should
-   observe (they default to Paris), and pick your temperature unit.
-   The **refresh interval** sets how often the weather station and the
-   plug's power are read: every 5 minutes by default, every minute at most.
-3. Save: the devices appear in the **Discovery** tab, ready to be added.
+Read every 30 seconds by default (10 s to 10 min, configurable).
 
-The **Prefer the local connection** toggle drives the demo plug: it reports
-the channel it actually uses as a badge (local or cloud), with an orange dot
-when it runs degraded (local refused, cloud fallback).
+**Energy**: the energy of the session and the total energy are **plain
+sensors**, never an index: they do not enter the Energy tab of Gladys (the
+charger is already counted by your main meter, it would be counted twice). No
+daily consumption is published, and a total of 0 is never published.
 
-## Actions
+## Installation
 
-- **Test the weather provider** — performs a live request to Open-Meteo and
-  shows the current temperature and humidity under the button.
-- **Identify a device** — pick one of your devices in the list and it will
-  signal itself (the demo light "blinks" in the logs).
+1. Give the charger a **fixed IP address** in your router.
+2. In the **web interface of the charger** (its IP address in a browser):
+   Settings, **Local REST API**: turn it on, with **read and write** access if
+   you want the commands, and copy the **API token**.
+3. Install the integration from the Gladys store. In its configuration, enter
+   the **IP address of the charger** and the **API token**.
+   - Instead of the token, you may give the **password of the web
+     interface**: the integration then logs in to read the token (the local
+     REST API must still be on), the user-defined charge limit and the rated
+     current of the charger. It never changes a setting of the charger.
+4. Save, then add the charger from the **Discovery** tab.
 
-## Scenes
+The token and the password are **kept by Gladys in its database, never shown
+again**, and sent only to the charger (the token in the `Authorization`
+header). They are never written in the logs, nor in `/data`, nor in a status.
 
-The integration adds its own cards to the scene editor (Gladys 5.1 or
-later), under the **Integrations** category:
+The **Test the connection** button reads the charger once (at most every 10
+seconds).
 
-- **Motion detected** (trigger) — starts the scene when a demo motion sensor
-  sees something move. Optionally pick the sensor and what moved (person,
-  animal); left empty, any detection matches. The following actions can
-  read what moved with `{{triggerEvent.data.target}}`.
-- **Identify a device** (action) — makes the chosen device signal itself.
-  It returns whether the device could signal itself, so the following
-  actions can depend on it.
+## Commands (off by default)
 
-## Dashboard
+"Start charging", "Stop charging" and "Set the charging current" refuse every
+command while **Allow the commands** is off. On:
 
-Add the **Demo status** widget to a dashboard: it shows the live
-temperature of the weather station and the power of the office plug, the
-connection the plug currently uses (orange when degraded) and the observed
-location. Its **Identify the light** button makes the demo light signal
-itself.
+- **Stop** sets the charge current limit to 0: the charger pauses the charge;
+- **Start** sets it again to the last current seen (6 A when none is known),
+  never above the ceiling; **refused when no vehicle is plugged in**, or on an
+  error, a fault or an unknown state;
+- **Charging current**: from 6 A to the **ceiling**: the "Ceiling of the
+  charging current" of the configuration (16 A by default, 32 A at most), and
+  with the password also the user-defined charge limit and the rated current
+  read from the charger (the lowest wins). Refused while the charge is
+  stopped (it would start it again: use Start). **One change a minute at
+  most** (start included): no fine regulation from Gladys.
 
-## Troubleshooting
+They are **buttons** and a **list**, never switches: a "turn everything off"
+(from Gladys, Google Home, Alexa or HomeKit) never reaches them. A scene can
+trigger them, only through an explicit action, and only when the commands are
+allowed. Note that the AI chat of Gladys (MCP) can create and run such a
+scene: while the commands are allowed, it can start or stop the charge.
 
-The integration logs everything it does: check the integration logs from the
-Gladys UI (or `docker logs` on the host) with `LOG_LEVEL=debug` for the full
-detail.
+Before each command, the integration **reads the charger again** and decides
+on that read only; the option is checked again right before sending. A
+command with nothing to do (already so) is not sent. A command that cannot
+leave within 3.5 seconds is refused unsent. When the charger does not confirm
+(silence, a 5xx error), Gladys shows "Command sent, without confirmation":
+check the state, read again 5 then 20 seconds later. One command at a time:
+another one is refused at once, **except "Stop charging", never held back**:
+it goes at once, even while another command is in flight (it is then sent
+once more when that command ends, and any start or current not sent yet gives
+way to it), even within the minute between two currents, even during a 429
+pause, and even when the read just before fails.
+
+A token in **read only** mode (access mode of the local REST API) refuses
+every command; the status says so.
+
+## Errors and limits
+
+- **Charger unreachable**: only the connector ("unavailable") and the status
+  ("Charger unreachable") change; the other values keep their last one. New
+  try after 30 s, 1, 2, then 5 minutes, never faster than the interval.
+- **Token refused**: the status asks to check it (a new token generated in
+  the web interface replaces the old one). **Password refused**: same. New
+  tries after 15 minutes, 1 hour, then every 6 hours, never sooner (kept in
+  `/data` across a restart, so a wrong password never locks the account in a
+  loop); saving new credentials tries again at once. With the password, a
+  token that expires (after a restart of the charger) gives one new login, at
+  most one every 10 minutes.
+- **429 (too many requests)** or **5xx**: a pause (1 minute to 6 hours for a 429) for the reads and the commands but "Stop charging", never shorter than
+  the refresh interval, kept in `/data` across a restart.
+- Neither the smart charging modes (solar, schedule), nor the phases, nor the
+  socket lock, nor the RFID cards can be changed from Gladys.
+- The logs never hold the text of the charger's answers, the token or the
+  password.
+
+## Credits
+
+Port of [peblar](https://github.com/frenck/python-peblar) (Franck Nijhof,
+MIT, version 2.1.0), the library of Home Assistant's Peblar integration.
+Apache-2.0 license.

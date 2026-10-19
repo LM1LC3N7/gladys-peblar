@@ -1,67 +1,135 @@
-# Template de démonstration
+# Peblar pour Gladys
 
-Ceci est la documentation utilisateur de l'intégration. Gladys ré-héberge ce
-fichier et affiche un lien **Documentation** permanent vers lui dans l'écran
-de configuration (dans la langue de l'utilisateur, avec l'anglais en repli) —
-c'est au moment de configurer que l'utilisateur en a le plus besoin. Gardez
-les courtes indications d'accueil dans les blocs `section` du `config_schema`
-du manifest ; mettez ici le pas-à-pas détaillé (captures d'écran, dépannage…).
+Affiche votre borne de recharge **Peblar** (Rocksolid, Business) dans Gladys
+par son **API REST locale** : sans cloud, sans compte, directement sur votre
+réseau.
+
+> **Jamais testé avec une vraie borne.** Sans lien avec Peblar.
+> L'intégration parle à la borne comme la bibliothèque peblar (utilisée par
+> Home Assistant). Peblar peut changer son API lors d'une mise à jour.
 
 ## Ce que vous obtenez
 
-Six appareils de démonstration apparaissent après l'installation : une
-station météo (vraies données Open-Meteo), un interrupteur, une lampe
-variable, une prise connectée avec mesure de puissance, un détecteur de
-mouvement et une caméra.
+Un appareil par borne, avec :
 
-## Configuration
+| Fonctionnalité                       | Contenu                                                                         |
+| ------------------------------------ | ------------------------------------------------------------------------------- |
+| État                                 | Aucun véhicule, branché en attente, charge arrêtée, en charge, erreur, défaut   |
+| Connecteur                           | Disponible, occupé, en défaut ou indisponible (catégorie « borne de recharge ») |
+| État de charge                       | En charge, véhicule connecté, en pause par la borne, inactif                    |
+| Véhicule branché                     | Oui / non                                                                       |
+| Puissance, et puissance L1 / L2 / L3 | En W                                                                            |
+| Courant L1 / L2 / L3                 | En A                                                                            |
+| Tension L1 / L2 / L3                 | En V (une phase que la borne ne mesure pas reste vide)                          |
+| Énergie de la session                | En kWh, un capteur simple                                                       |
+| Énergie totale                       | En kWh, un capteur simple                                                       |
+| Limite du courant de charge          | En A : la limite demandée par l'API REST locale (0 = charge arrêtée)            |
+| Limite de courant appliquée          | En A : ce que la borne permet vraiment (câble, délestage, solaire…)             |
+| Limité par                           | Ce qui fixe la limite appliquée (texte de la borne)                             |
+| Erreur / avertissement signalé       | Oui / non                                                                       |
+| Monophasé forcé                      | Oui / non (lecture seule)                                                       |
+| Démarrer, Arrêter la charge          | Boutons (commandes autorisées seulement)                                        |
+| Régler le courant de charge          | Liste de 6 A au plafond (commandes autorisées seulement)                        |
 
-1. Ouvrez l'onglet **Configuration** de l'intégration.
-2. Renseignez la **latitude** et la **longitude** que la station météo de
-   démonstration doit observer (Paris par défaut), et choisissez votre unité
-   de température. L'**intervalle de rafraîchissement** règle la fréquence
-   de lecture de la station météo et de la puissance de la prise : toutes
-   les 5 minutes par défaut, toutes les minutes au plus.
-3. Enregistrez : les appareils apparaissent dans l'onglet **Découverte**,
-   prêts à être ajoutés.
+Lecture toutes les 30 secondes par défaut (de 10 s à 10 min, réglable).
 
-Le réglage **Préférer la connexion locale** pilote la prise de
-démonstration : elle affiche en badge le canal réellement utilisé (local ou
-cloud), avec un point orange quand elle fonctionne en mode dégradé (local
-refusé, bascule cloud).
+**Énergie** : l'énergie de la session et l'énergie totale sont des
+**capteurs simples**, jamais des index : elles n'entrent pas dans l'onglet
+Énergie de Gladys (la borne est déjà comptée par votre compteur principal,
+elle serait comptée deux fois). Aucune consommation journalière n'est
+publiée, et un total de 0 n'est jamais publié.
 
-## Actions
+## Installation
 
-- **Tester le fournisseur météo** — effectue une requête en direct vers
-  Open-Meteo et affiche la température et l'humidité actuelles sous le
-  bouton.
-- **Identifier un appareil** — choisissez un de vos appareils dans la liste
-  et il se signale (la lampe de démonstration « clignote » dans les logs).
+1. Donnez à la borne une **adresse IP fixe** dans votre box.
+2. Dans l'**interface web de la borne** (son adresse IP dans un navigateur) :
+   Paramètres, **API REST locale** : activez-la, en **lecture et écriture**
+   si vous voulez les commandes, et copiez le **jeton d'API**.
+3. Installez l'intégration depuis le store de Gladys. Dans sa configuration,
+   saisissez l'**adresse IP de la borne** et le **jeton d'API**.
+   - À la place du jeton, vous pouvez donner le **mot de passe de
+     l'interface web** : l'intégration se connecte alors pour lire le jeton
+     (l'API REST locale doit quand même être activée), la limite de charge
+     définie par l'utilisateur et le courant nominal de la borne. Elle ne
+     change jamais un réglage de la borne.
+4. Enregistrez, puis ajoutez la borne depuis l'onglet **Découverte**.
 
-## Scènes
+Le jeton et le mot de passe sont **gardés par Gladys dans sa base, jamais
+réaffichés**, et envoyés seulement à la borne (le jeton dans l'en-tête
+`Authorization`). Ils ne sont jamais écrits dans les journaux, ni dans
+`/data`, ni dans un état.
 
-L'intégration ajoute ses propres cartes à l'éditeur de scènes (Gladys 5.1
-ou plus récent), dans la catégorie **Intégrations** :
+Le bouton **Tester la connexion** lit la borne une fois (au plus toutes les
+10 secondes).
 
-- **Mouvement détecté** (déclencheur) — lance la scène quand un détecteur
-  de démonstration voit bouger quelque chose. Choisissez éventuellement le
-  détecteur et ce qui a bougé (personne, animal) ; laissés vides, toute
-  détection correspond. Les actions suivantes peuvent lire ce qui a bougé
-  avec `{{triggerEvent.data.target}}`.
-- **Identifier un appareil** (action) — fait se signaler l'appareil choisi.
-  Elle indique si l'appareil a pu se signaler, pour que les actions
-  suivantes puissent en dépendre.
+## Commandes (désactivées par défaut)
 
-## Tableau de bord
+« Démarrer la charge », « Arrêter la charge » et « Régler le courant de
+charge » refusent toute commande tant que **Autoriser les commandes** est
+désactivé. Activé :
 
-Ajoutez le widget **État de la démo** à un tableau de bord : il affiche en
-direct la température de la station météo et la puissance de la prise du
-bureau, la connexion utilisée par la prise (en orange si dégradée) et la
-position observée. Son bouton **Identifier la lampe** fait se signaler la
-lampe de démonstration.
+- **Arrêter** met la limite du courant de charge à 0 : la borne suspend la
+  charge ;
+- **Démarrer** la remet au dernier courant vu (6 A s'il n'est pas connu),
+  jamais au-dessus du plafond ; **refusé sans véhicule branché**, ou sur une
+  erreur, un défaut ou un état inconnu ;
+- **Courant de charge** : de 6 A au **plafond** : le « Plafond du courant de
+  charge » de la configuration (16 A par défaut, 32 A au plus), et avec le
+  mot de passe aussi la limite définie par l'utilisateur et le courant
+  nominal lus sur la borne (le plus bas l'emporte). Refusé tant que la charge
+  est arrêtée (cela la relancerait : utilisez Démarrer). **Un changement par
+  minute au plus** (démarrage compris) : pas de régulation fine depuis
+  Gladys.
 
-## Dépannage
+Ce sont des **boutons** et une **liste**, jamais des interrupteurs : un
+« éteins tout » (depuis Gladys, Google Home, Alexa ou HomeKit) ne les atteint
+jamais. Une scène peut les déclencher, seulement par une action explicite, et
+seulement quand les commandes sont autorisées. Notez que le chat IA de Gladys
+(MCP) peut créer et lancer une telle scène : tant que les commandes sont
+autorisées, il peut démarrer ou arrêter la charge.
 
-L'intégration journalise tout ce qu'elle fait : consultez les logs de
-l'intégration depuis l'interface Gladys (ou `docker logs` sur l'hôte) avec
-`LOG_LEVEL=debug` pour le détail complet.
+Avant chaque commande, l'intégration **relit la borne** et décide sur cette
+lecture seulement ; l'option est revérifiée juste avant l'envoi. Une commande
+sans effet (déjà le cas) n'est pas envoyée. Une commande qui ne peut pas
+partir dans les 3,5 secondes est refusée sans être envoyée. Quand la borne ne
+confirme pas (silence, erreur 5xx), Gladys affiche « Commande envoyée, sans
+confirmation » : vérifiez l'état, relu 5 puis 20 secondes plus tard. Une
+commande à la fois : une autre est refusée aussitôt, **sauf « Arrêter la
+charge », jamais retenu** : il part tout de suite, même pendant une autre
+commande (il est alors renvoyé une fois quand elle se termine, et un
+démarrage ou un courant pas encore envoyé lui cède la place), même dans la
+minute entre deux courants, même pendant une pause 429, et même quand la
+lecture juste avant échoue.
+
+Un jeton en **lecture seule** (mode d'accès de l'API REST locale) refuse
+toute commande ; l'état de l'intégration le signale.
+
+## Erreurs et limites
+
+- **Borne injoignable** : seuls le connecteur (« indisponible ») et l'état
+  (« Borne injoignable ») changent ; les autres valeurs gardent la dernière.
+  Nouvel essai après 30 s, 1, 2, puis 5 minutes, jamais plus vite que
+  l'intervalle.
+- **Jeton refusé** : l'état demande de le vérifier (un nouveau jeton généré
+  dans l'interface web remplace l'ancien). **Mot de passe refusé** : de même.
+  Nouveaux essais après 15 minutes, 1 heure, puis toutes les 6 heures, jamais
+  plus tôt (gardé dans `/data` après un redémarrage, pour qu'un mauvais mot
+  de passe ne bloque jamais le compte en boucle) ; enregistrer de nouveaux
+  identifiants réessaie aussitôt. Avec le mot de passe, un jeton qui expire
+  (après un redémarrage de la borne) donne une nouvelle connexion, au plus
+  une toutes les 10 minutes.
+- **429 (trop de requêtes)** ou **5xx** : une pause (de 1 minute à 6 heures
+  pour un 429) pour les lectures et les commandes sauf « Arrêter la charge »,
+  jamais plus courte que l'intervalle, gardée dans `/data` après un
+  redémarrage.
+- Ni les modes de charge intelligente (solaire, programmation), ni les
+  phases, ni le verrouillage de la prise, ni les badges RFID ne se changent
+  depuis Gladys.
+- Les journaux ne contiennent jamais le texte des réponses de la borne, ni le
+  jeton, ni le mot de passe.
+
+## Crédits
+
+Portage de [peblar](https://github.com/frenck/python-peblar) (Franck Nijhof,
+MIT, version 2.1.0), la bibliothèque de l'intégration Peblar de Home
+Assistant. Licence Apache-2.0.
