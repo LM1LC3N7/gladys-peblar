@@ -180,6 +180,8 @@ export const TIMINGS = {
   guard: 90 * SECOND,
   /** A stop reaffirmed at most this often while its guard holds (a late command landing after it). */
   stopReasserts: 2,
+  /** A watched stop whose resend got a 429: watched until the first read after the pause, 10 min at most. */
+  stopWatchMax: 10 * MINUTE,
   /** One change of the charging current (start included) a minute; a stop is never limited. */
   currentMinInterval: MINUTE,
 };

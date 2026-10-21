@@ -104,13 +104,20 @@ or 5xx pause or a refused-token block (then a single request, without the read),
 even after a restart of the integration before the charger could be read
 again (the serial number of the charger last read at the address is kept in
 `/data`; Start and the current wait for that first read), and even when the
-read just before fails. With the password only, a stop needs the token read
-at the last login: after a restart, until the first login, or during a
-password block, it is refused. When a command stayed without confirmation,
-or when a stop overtook a command in flight, that command may still reach
-the charger later: the stop is watched for 90 seconds, and sent again (twice
-at most) if a read shows a current again while no other command left, also
-when the stop sent again after that command failed.
+read just before fails. **With the password only**, a stop needs the token
+read at a login, so it is refused until the first successful login: after a
+restart, until the end of a pause kept (5 minutes, up to 6 hours if the
+charger asks), during a password block (15 min, 1 h, 6 h), and up to 10
+minutes after a login the charger answered with an error (a login that never
+reached it is tried again sooner). **For a scene that must be able to stop
+the charge (load shedding), use the API token.** When a command stayed
+without confirmation, or when a stop overtook a command in flight that may
+still land after it, that command may reach the charger later: the stop is
+watched for 90 seconds (until the first read after a 429 pause, 10 minutes
+at most), and sent again (twice at most) if a read shows a current again
+while no other command left Gladys, also when the stop sent again after that
+command failed. A start made meanwhile from the Peblar app, its web
+interface or OCPP is then cancelled too.
 
 A token in **read only** mode (access mode of the local REST API) refuses
 every command; the status says so.
@@ -129,6 +136,9 @@ every command; the status says so.
   most one every 10 minutes.
 - **429 (too many requests)** or **5xx**: a pause (1 minute to 6 hours for a 429) for the reads and the commands but "Stop charging", never shorter than
   the refresh interval, kept in `/data` across a restart.
+- **Password only**: no command (stop included) until the first successful
+  login after a restart, a pause or a password block; use the API token for
+  the commands.
 - Neither the smart charging modes (solar, schedule), nor the phases, nor the
   socket lock, nor the RFID cards can be changed from Gladys.
 - The logs never hold the text of the charger's answers, the token or the

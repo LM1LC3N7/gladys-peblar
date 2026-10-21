@@ -229,7 +229,36 @@ up to date at the end of every milestone.
     the pending one);
   - a command refused during a 5xx pause says "server error";
   - an address holding an `@` is ignored (`credentialsInHost`), the status
-    gives a fixed text, never the typed one.
+    gives a fixed text, never the typed one;
+  - before the first read, a stop goes to whatever answers at the address:
+    with a serial kept, a charger replaced at the same address (another
+    serial) gets the stop of the old device; harmless (a stop), and fixed by
+    the first read (the old device becomes "not read any more", its start
+    refused, the new serial kept in `/data`) (review 1, M5).
+- **0.1.2 review 1 fixes** (2026-10-21):
+  - I1: the device kept in `/data` is offline unless a first read is under
+    way (no credentials, credentials refused by the form, an answer without
+    a serial: "Charger unreachable", badge unreachable);
+  - I2: docs, and the description of the password field, give how long a
+    stop waits with the password alone and recommend the token for the
+    commands; a login that never reached the charger (unreachable) does not
+    count in the 10 minutes between two logins (the backoff spaces it);
+  - M1: each command notes its confirmation (`confirmedAt`); a stop is
+    reaffirmed only when the command it overtook may land after it
+    (`mayLand`: left, not confirmed before the stop left), or one is
+    unconfirmed; docs: a start from the Peblar app or OCPP within the 90 s
+    watch is cancelled;
+  - M2: a guard of a command that left before the stop guarded now (an
+    overtaken one settling after it) never replaces the stop's guard; a
+    stop resend skipped for lack of a token keeps the reaffirmation; a 429
+    on a resend or a reaffirmation keeps the watch until the first read after
+    the pause (10 min at most, `TIMINGS.stopWatchMax`);
+  - M3: no "not read any more" while no charger is known since the start;
+    the created devices offline during a pause kept before any read;
+  - M4 (nrgkick M1, M2, M5): a bound missing from one web answer keeps the
+    last one; the minute between two currents and the watch of an
+    unconfirmed command survive a restart; a second stop pressed while the
+    first only waits to be sent again goes itself.
 - **Late answers** (KEBA M1/M2, over HTTP): an answer always belongs to its
   request; but a poll read begun before a command left may show the state
   before it: it is quarantined (neither applied, nor published, nor used by

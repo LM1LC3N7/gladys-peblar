@@ -112,14 +112,22 @@ sur jeton refusé (alors une seule requête, sans relecture), même après un
 redémarrage de l'intégration avant que la borne ait pu être relue (le numéro
 de série de la dernière borne lue à cette adresse est gardé dans `/data` ;
 Démarrer et le courant attendent cette première lecture), et même quand la
-lecture juste avant échoue. Avec le mot de passe seul, un arrêt a besoin du
-jeton lu à la dernière connexion : après un redémarrage, avant la première
-connexion, ou pendant un blocage sur mot de passe, il est refusé. Quand une
-commande est restée sans confirmation, ou quand un arrêt a doublé une
-commande en cours, celle-ci peut encore atteindre la borne plus tard :
-l'arrêt est surveillé pendant 90 secondes, et renvoyé (deux fois au plus) si
-une lecture montre de nouveau un courant alors qu'aucune autre commande n'est
-partie, y compris quand le renvoi de l'arrêt après cette commande a échoué.
+lecture juste avant échoue. **Avec le mot de passe seul**, un arrêt a besoin
+du jeton lu à une connexion : il est donc refusé jusqu'à la première
+connexion réussie : après un redémarrage, jusqu'à la fin d'une pause gardée
+(5 minutes, jusqu'à 6 heures si la borne le demande), pendant un blocage sur
+mot de passe (15 min, 1 h, 6 h), et jusqu'à 10 minutes après une connexion à
+laquelle la borne a répondu par une erreur (une connexion qui ne l'a pas
+atteinte est retentée plus tôt). **Pour une scène qui doit pouvoir arrêter la
+charge (délestage), utilisez le jeton d'API.** Quand une commande est restée
+sans confirmation, ou quand un arrêt a doublé une commande en cours qui peut
+encore arriver après lui, celle-ci peut atteindre la borne plus tard :
+l'arrêt est surveillé pendant 90 secondes (jusqu'à la première lecture après
+une pause 429, 10 minutes au plus), et renvoyé (deux fois au plus) si une
+lecture montre de nouveau un courant alors qu'aucune autre commande n'est
+partie de Gladys, y compris quand le renvoi de l'arrêt après cette commande
+a échoué. Un démarrage fait entre-temps depuis l'application Peblar, son
+interface web ou OCPP est alors annulé lui aussi.
 
 Un jeton en **lecture seule** (mode d'accès de l'API REST locale) refuse
 toute commande ; l'état de l'intégration le signale.
@@ -142,6 +150,9 @@ toute commande ; l'état de l'intégration le signale.
   pour un 429) pour les lectures et les commandes sauf « Arrêter la charge »,
   jamais plus courte que l'intervalle, gardée dans `/data` après un
   redémarrage.
+- **Mot de passe seul** : aucune commande (arrêt compris) avant la première
+  connexion réussie après un redémarrage, une pause ou un blocage sur mot de
+  passe ; utilisez le jeton d'API pour les commandes.
 - Ni les modes de charge intelligente (solaire, programmation), ni les
   phases, ni le verrouillage de la prise, ni les badges RFID ne se changent
   depuis Gladys.

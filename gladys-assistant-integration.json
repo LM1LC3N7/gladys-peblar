@@ -80,8 +80,8 @@
         "fr": "Mot de passe de l'interface web (à la place du jeton)"
       },
       "description": {
-        "en": "Optional, if you give no token: the integration logs in to the web interface of the charger to read the API token (the local REST API must be on), the installation limit and the rated current. Sent in clear, over HTTP, on the local network. Kept by Gladys in its database, never shown again, sent only to the charger. A refused password is tried again after 15 min, 1 h, then every 6 h.",
-        "fr": "Facultatif, si vous ne donnez pas de jeton : l'intégration se connecte à l'interface web de la borne pour lire le jeton d'API (l'API REST locale doit être activée), la limite de l'installation et le courant nominal. Envoyé en clair, en HTTP, sur le réseau local. Gardé par Gladys dans sa base, jamais réaffiché, envoyé seulement à la borne. Un mot de passe refusé est réessayé après 15 min, 1 h, puis toutes les 6 h."
+        "en": "Optional, if you give no token: the integration logs in to the web interface of the charger to read the API token (the local REST API must be on), the installation limit and the rated current. Sent in clear, over HTTP, on the local network. Kept by Gladys in its database, never shown again, sent only to the charger. A refused password is tried again after 15 min, 1 h, then every 6 h. For the commands, prefer the token: with the password alone, a stop waits for the first login after a restart.",
+        "fr": "Facultatif, si vous ne donnez pas de jeton : l'intégration se connecte à l'interface web de la borne pour lire le jeton d'API (l'API REST locale doit être activée), la limite de l'installation et le courant nominal. Envoyé en clair, en HTTP, sur le réseau local. Gardé par Gladys dans sa base, jamais réaffiché, envoyé seulement à la borne. Un mot de passe refusé est réessayé après 15 min, 1 h, puis toutes les 6 h. Pour les commandes, préférez le jeton : avec le mot de passe seul, l'arrêt attend la première connexion après un redémarrage."
       },
       "required": false
     },

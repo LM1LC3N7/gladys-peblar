@@ -24,6 +24,19 @@ the notes of the version's GitHub Release.
 - During a 5xx pause, a refused command says "server error", not "slow down".
 - Credentials pasted in the address (`user:password@`) are ignored and never
   shown back in the status.
+- After a restart, the charger kept in `/data` is shown offline whenever it
+  cannot be read (no credentials, an answer without a serial, a pause or a
+  block), never left "charging", never "not read any more".
+- With the password only, a login that never reached the charger is tried
+  again sooner; the docs and the password field say how long a stop waits
+  without the token and recommend the token for the commands.
+- A stop is reaffirmed only when the command it overtook may still land
+  after it; a 429 on a resend keeps the watch until the first read after the
+  pause; the docs say that a start from the Peblar app or OCPP within the
+  90 s watch is cancelled.
+- A bound missing from one web answer keeps the last one read; the minute
+  between two currents survives a restart; a second stop pressed while the
+  first waits to be sent again goes itself.
 
 ## [0.1.1] - 2026-10-19
 

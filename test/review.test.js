@@ -103,7 +103,9 @@ test('B1 (S1): a refused command never cancels the stop sent again', async (t) =
   assert.equal((await stop2).success, true);
   assert.equal((await start).success, false, 'refused unsent: still running');
   assert.equal((await current).success, true);
-  assert.deepEqual(ctx.limits(), [10_000, 0, 0]);
+  // 0.1.2 (nrgkick M5): the second stop, pressed while the first only waits
+  // to be sent again, goes itself.
+  assert.deepEqual(ctx.limits(), [10_000, 0, 0, 0]);
   assert.equal(ctx.charger.ev.ChargeCurrentLimit, 0, 'the charger ends stopped');
 });
 
@@ -401,7 +403,7 @@ for (const failure of ['503', 'unreachable']) {
 }
 
 /** A first run that keeps the serial in /data, then a new app on the same Gladys and store. */
-async function restart(t, prepare, config = TOKEN_CFG) {
+async function restart(t, prepare, config = TOKEN_CFG, next = config) {
   const store = memoryStore();
   const first = await setup(t, { config, store });
   assert.deepEqual(store.data.charger, { address: HOST, serial: SERIAL }, 'serial kept');
@@ -416,13 +418,14 @@ async function restart(t, prepare, config = TOKEN_CFG) {
     store,
   });
   t.after(() => app.stop());
-  await app.connected(config);
+  await app.connected(next);
   await settle();
   const device = first.gladys.fake.devices.find((d) => d.external_id === DEVICE);
   const feature = (role) => device.features.find((f) => f.external_id === `${DEVICE}:${role}`);
   return {
     app,
     server,
+    advance: first.advance,
     gladys: first.gladys,
     send: (role, value = 1) => app.setValue(device, feature(role), value),
   };
@@ -443,6 +446,14 @@ for (const [name, prepare] of [
       store.data.pause = { until: NOW + 5 * MINUTE, reason: '5xx' };
     },
   ],
+  // M3: the first restart after the update to 0.1.2, during a block.
+  [
+    'no serial kept (0.1.1) and a block',
+    (store) => {
+      store.data.charger = null;
+      store.data.block = { until: NOW + HOUR, mode: 'token', failures: 2 };
+    },
+  ],
 ]) {
   test(`0.1.2 #2: after a restart with ${name}, the stop goes before any read`, async (t) => {
     const ctx = await restart(t, prepare);
@@ -454,13 +465,131 @@ for (const [name, prepare] of [
     // Start and the current wait for a read (identity and bounds unchecked).
     await assert.rejects(ctx.send('start-charge'), /(première lecture|n'est pas lue)/);
     await assert.rejects(ctx.send('set-current', '10'), /(première lecture|n'est pas lue)/);
-    // Shown offline meanwhile, never "another charger".
+    // Shown offline meanwhile, never "another charger" (M3: also without a serial kept).
     assert.doesNotMatch(ctx.gladys.fake.connectionStatus.message.fr, /Plus lue/);
-    if (name !== 'no serial kept (0.1.1) and a 5xx pause') {
-      assert.equal(ctx.gladys.fake.lastState(`${DEVICE}:status`), 'Borne injoignable');
-    }
+    assert.equal(ctx.gladys.fake.lastState(`${DEVICE}:status`), 'Borne injoignable');
   });
 }
+
+// --- 0.1.2, review 1 ---
+
+for (const [name, next, prepare] of [
+  ['the token removed', { ...TOKEN_CFG, api_token: '' }, () => {}],
+  ['a token refused by the form', { ...TOKEN_CFG, api_token: 'jéton' }, () => {}],
+  [
+    'an answer without a serial',
+    TOKEN_CFG,
+    (_store, server) => (server.charger.system.ProductSn = undefined),
+  ],
+]) {
+  test(`0.1.2 I1: the device kept in /data is offline after a restart with ${name}`, async (t) => {
+    const ctx = await restart(t, prepare, TOKEN_CFG, next);
+    await ctx.advance(SECOND);
+    assert.equal(ctx.gladys.fake.lastState(`${DEVICE}:status`), 'Borne injoignable');
+    assert.equal(ctx.gladys.fake.transports.at(-1).transport, DEVICE_TRANSPORTS.UNREACHABLE);
+    assert.doesNotMatch(ctx.gladys.fake.connectionStatus.message.fr, /Plus lue/);
+  });
+}
+
+test('0.1.2 I2: with the password, a login that never reached the charger is not spaced', async (t) => {
+  const ctx = await restart(t, (_store, server) => (server.charger.down = true), PASS_CFG);
+  assert.equal(ctx.server.logins().length, 1, 'tried at the start, unreachable');
+  ctx.server.charger.down = false;
+  await ctx.advance(3 * MINUTE, SECOND);
+  assert.ok(ctx.server.logins().length >= 2, 'logged in once the charger is back');
+  await ctx.send('stop-charge');
+  assert.equal(ctx.server.charger.ev.ChargeCurrentLimit, 0);
+});
+
+test('0.1.2 I2: the docs and the password field say the limit of the password alone', () => {
+  assert.match(read('docs/en.md'), /use the API token/);
+  assert.match(read('docs/fr.md'), /utilisez le jeton d'API/);
+  const manifest = JSON.parse(read('gladys-assistant-integration.json'));
+  const password = manifest.config_schema.find((f) => f.key === 'password');
+  assert.match(password.description.fr, /préférez le jeton/);
+  assert.match(password.description.en, /prefer the token/);
+});
+
+test('0.1.2 M1: a current confirmed before the stop left is never undone later', async (t) => {
+  const server = fakeCharger({ patchPlan: (i) => (i === 0 ? { answerAfter: 300 } : {}) });
+  const ctx = await setup(t, { config: TOKEN_CFG, server });
+  server.charger.delays['/api/wlac/v1/evinterface'] = 500;
+  const current = ctx.fire('set-current', '10');
+  await ctx.advance(600);
+  const stop = ctx.fire('stop-charge');
+  await ctx.advance(30 * SECOND);
+  assert.equal((await current).success, true);
+  assert.equal((await stop).success, true);
+  // The user starts the charge again from the Peblar app.
+  server.charger.ev.ChargeCurrentLimit = 16_000;
+  await ctx.advance(60 * SECOND, SECOND);
+  assert.equal(server.charger.ev.ChargeCurrentLimit, 16_000, 'never stopped again');
+});
+
+test('0.1.2 M2: a 429 on the stop sent again keeps the watch past the pause', async (t) => {
+  const server = fakeCharger({
+    patchPlan: (i) => (i === 0 ? { applyAfter: 6000, answerAfter: 60_000 } : {}),
+  });
+  const original = server.transport;
+  let patches = 0;
+  server.transport = async (request) => {
+    if (request.method === 'PATCH' && ++patches === 3) {
+      server.requests.push(request);
+      return { status: 429, headers: {}, body: 'slow down' };
+    }
+    return original(request);
+  };
+  const ctx = await setup(t, { config: TOKEN_CFG, server });
+  ctx.fire('set-current', '10');
+  await ctx.advance(500);
+  const stop = ctx.fire('stop-charge');
+  await ctx.advance(10 * SECOND);
+  assert.equal((await stop).success, true);
+  assert.equal(server.charger.ev.ChargeCurrentLimit, 10_000, 'the late current landed');
+  await ctx.advance(7 * MINUTE, SECOND);
+  assert.equal(server.charger.ev.ChargeCurrentLimit, 0, 'reaffirmed after the pause');
+});
+
+test('0.1.2 M4 (nrgkick M1): a bound missing from one web answer keeps the last one', async (t) => {
+  const server = fakeCharger();
+  const ctx = await setup(t, { config: { ...PASS_CFG, max_current: 32 }, server });
+  assert.equal(ctx.app.ceiling, 20);
+  delete server.charger.user.CurrentCtrlFixedChargeCurrentLimit;
+  delete server.charger.info.HwMaxCurrent;
+  await ctx.advance(25 * HOUR, 10 * MINUTE);
+  assert.equal(ctx.app.ceiling, 20, 'never back to the configured 32 A');
+});
+
+test('0.1.2 M4 (nrgkick M2): the minute between two currents survives a restart', async (t) => {
+  const ctx = await setup(t, { config: TOKEN_CFG });
+  let ack = await ctx.press('set-current', '10');
+  assert.equal(ack.success, true, ack.error);
+  await ctx.app.configUpdated({ ...TOKEN_CFG, host: 'peblar.local' });
+  await ctx.advance(5 * SECOND);
+  ack = await ctx.press('set-current', '12');
+  assert.equal(ack.success, false);
+  assert.match(ack.error, /moins d'une minute/);
+});
+
+test('0.1.2 M4 (nrgkick M5): a second stop while the first waits to be sent again goes itself', async (t) => {
+  const server = fakeCharger({
+    patchPlan: (i) => (i === 0 ? { applyAfter: 2500, answerAfter: 2500 } : {}),
+  });
+  const ctx = await setup(t, { config: TOKEN_CFG, server });
+  ctx.fire('set-current', '10');
+  await ctx.advance(500);
+  const stop = ctx.fire('stop-charge');
+  await ctx.advance(SECOND);
+  assert.equal((await stop).success, true);
+  const before = ctx.limits().length;
+  const stop2 = ctx.fire('stop-charge');
+  await ctx.advance(200);
+  // Sent at once, not merged with the resend of the first (after 2.5 s).
+  assert.deepEqual(ctx.limits().slice(before), [0], 'the second stop was sent itself');
+  await ctx.advance(30 * SECOND);
+  assert.equal((await stop2).success, true);
+  assert.equal(server.charger.ev.ChargeCurrentLimit, 0);
+});
 
 test('0.1.2 #2: a serial kept for another address is never restored', async (t) => {
   const ctx = await restart(t, (store) => {
