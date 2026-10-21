@@ -100,8 +100,6 @@ const freshCharger = () => ({
   webAt: -Infinity,
   /** When the last request that writes left, resends included (a read begun before it is quarantined). */
   lastSentAt: -Infinity,
-  /** When the last command of a user left (resends of a stop excluded). */
-  lastCommandAt: -Infinity,
   /** Until then, a command not confirmed may still land (a stop sent meanwhile is reaffirmed). */
   unconfirmedUntil: -Infinity,
   /** When the last current change (start included) left: one a minute. */
@@ -163,7 +161,6 @@ export class PeblarApp {
     const previous = this.charger;
     this.charger = {
       ...freshCharger(),
-      lastCommandAt: previous.lastCommandAt,
       lastCurrentAt: previous.lastCurrentAt,
       unconfirmedUntil: previous.unconfirmedUntil,
     };
@@ -1299,7 +1296,6 @@ export class PeblarApp {
     const timeoutMs = Math.max(200, received + TIMINGS.commandAnswerBy - this.now());
     const previousCurrentAt = c.lastCurrentAt;
     c.lastSentAt = this.now();
-    c.lastCommandAt = this.now();
     entry.sentAt = this.now();
     if (!isStop) {
       c.lastCurrentAt = this.now();
@@ -1380,9 +1376,10 @@ export class PeblarApp {
       .then(async () => {
         // Only the charger and the token are checked: the stop was accepted,
         // turning the option off since never cancels it.
-        if (this.charger.lastCommandAt > entry.sentAt) {
-          // A newer command really left since this stop: its intent wins.
-          this.logger.info('Peblar: stop not sent again (newer command sent)');
+        if (this.charger.lastCurrentAt > entry.sentAt) {
+          // A start or a current really left since this stop: its intent
+          // wins. Another stop never cancels this resend.
+          this.logger.info('Peblar: stop not sent again (newer start or current sent)');
           return;
         }
         if (this.charger.serial !== serial) {

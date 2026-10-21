@@ -36,7 +36,8 @@ the notes of the version's GitHub Release.
   90 s watch is cancelled.
 - A bound missing from one web answer keeps the last one read; the minute
   between two currents survives a restart; a second stop pressed while the
-  first waits to be sent again goes itself.
+  first waits to be sent again goes itself, and never cancels the resend of
+  the first (only a start or a current sent after the stop does).
 
 ## [0.1.1] - 2026-10-19
 

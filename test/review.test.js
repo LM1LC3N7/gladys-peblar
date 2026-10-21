@@ -98,13 +98,18 @@ test('B1 (S1): a refused command never cancels the stop sent again', async (t) =
   const start = ctx.fire('start-charge');
   await ctx.advance(600);
   const stop2 = ctx.fire('stop-charge');
+  await ctx.advance(SECOND);
+  // At 2.6 s: the current landed at 2.5 s and the first stop was sent again
+  // at once (the second stop never cancels that resend: review 2, B1).
+  assert.equal(ctx.charger.ev.ChargeCurrentLimit, 0, 'stopped again at 2.6 s');
+  // 0.1.2 (nrgkick M5): the second stop, pressed while the first only waits
+  // to be sent again, goes itself; then the resend of the first.
+  assert.deepEqual(ctx.limits(), [10_000, 0, 0, 0]);
   await ctx.advance(30 * SECOND);
   assert.equal((await stop).success, true);
   assert.equal((await stop2).success, true);
   assert.equal((await start).success, false, 'refused unsent: still running');
   assert.equal((await current).success, true);
-  // 0.1.2 (nrgkick M5): the second stop, pressed while the first only waits
-  // to be sent again, goes itself.
   assert.deepEqual(ctx.limits(), [10_000, 0, 0, 0]);
   assert.equal(ctx.charger.ev.ChargeCurrentLimit, 0, 'the charger ends stopped');
 });
@@ -586,9 +591,14 @@ test('0.1.2 M4 (nrgkick M5): a second stop while the first waits to be sent agai
   await ctx.advance(200);
   // Sent at once, not merged with the resend of the first (after 2.5 s).
   assert.deepEqual(ctx.limits().slice(before), [0], 'the second stop was sent itself');
-  await ctx.advance(30 * SECOND);
+  // The current lands at 2.5 s: the first stop is still sent again at once
+  // (review 2, B1), the charge never stays resumed after the acks.
+  for (let elapsed = 0; elapsed < 30 * SECOND; elapsed += 100) {
+    await ctx.advance(100);
+    assert.equal(server.charger.ev.ChargeCurrentLimit, 0, `stopped at +${elapsed + 100} ms`);
+  }
   assert.equal((await stop2).success, true);
-  assert.equal(server.charger.ev.ChargeCurrentLimit, 0);
+  assert.deepEqual(ctx.limits().slice(before), [0, 0], 'then the resend of the first');
 });
 
 test('0.1.2 #2: a serial kept for another address is never restored', async (t) => {

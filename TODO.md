@@ -180,8 +180,9 @@ up to date at the end of every milestone.
   ("Stop charging stays available"). No fine regulation (docs).
 - **Review fixes** (2026-10-19):
   - B1: the stop sent again (after the command it overtook) is cancelled only
-    when a command really left after it (`lastCommandAt` against the time
-    the stop left), never by a command refused unsent;
+    when a command really left after it (since 0.1.2: a start or a current,
+    `lastCurrentAt` against the time the stop left), never by a command
+    refused unsent;
   - I1: a command other than a stop left without confirmation opens a 90 s
     window; a stop sent in it keeps its guard the whole 90 s and, at each
     polling or follow-up read, if the limit read is above 0 and no start or
@@ -259,6 +260,12 @@ up to date at the end of every milestone.
     last one; the minute between two currents and the watch of an
     unconfirmed command survive a restart; a second stop pressed while the
     first only waits to be sent again goes itself.
+- **0.1.2 review 2 fix** (2026-10-21, B1): the stop sent again after the
+  command it overtook is skipped only when a start or a current really left
+  after it (`lastCurrentAt > entry.sentAt`), never because of another stop
+  (since nrgkick M5 a second stop goes itself; `lastCommandAt` counted it
+  and cancelled the resend, so the late current stayed). `lastCommandAt`
+  removed (nothing else read it).
 - **Late answers** (KEBA M1/M2, over HTTP): an answer always belongs to its
   request; but a poll read begun before a command left may show the state
   before it: it is quarantined (neither applied, nor published, nor used by
