@@ -1,6 +1,6 @@
 {
   "name": "gladys-peblar",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "Gladys Assistant external integration for Peblar EV chargers (state, power, current and voltage per phase, session and total energy, charge current limit; optional start, stop and charging current), over their local REST API. Unofficial, not affiliated with Peblar.",
   "type": "module",
