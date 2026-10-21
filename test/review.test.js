@@ -12,6 +12,7 @@ import { createFakeGladys } from '@gladysassistant/integration-sdk/testing';
 import { PeblarApp } from '../src/app.js';
 import { HOUR, MINUTE, SECOND } from '../src/constants.js';
 import { registerHandlers } from '../src/handlers.js';
+import { ChargerError, ERROR_KINDS } from '../src/peblar/http.js';
 import { memoryStore } from '../src/store.js';
 import {
   HOST,
@@ -363,4 +364,148 @@ test('S2c: no reaffirmation from the fresh read of a Start, nor while it runs', 
     'no 0 raced the start',
   );
   assert.ok(!ctx.logs.slice(logsBefore).some((l) => /came back after a stop/.test(l)));
+});
+
+// --- 0.1.2: points found on the sibling modules (nrgkick I1, M6, M8; openevse B1, M4) ---
+
+for (const failure of ['503', 'unreachable']) {
+  test(`0.1.2 #1: the stop sent again after an overtaken current fails (${failure}): reaffirmed`, async (t) => {
+    // The current lands and is confirmed after the stop (a real 2xx: never
+    // "unconfirmed"); the stop sent again then fails.
+    const server = fakeCharger({
+      patchPlan: (i) => (i === 0 ? { applyAfter: 2500, answerAfter: 2500 } : {}),
+    });
+    const original = server.transport;
+    let patches = 0;
+    server.transport = async (request) => {
+      if (request.method === 'PATCH' && ++patches === 3) {
+        server.requests.push(request);
+        if (failure === '503') {
+          return { status: 503, headers: {}, body: 'busy' };
+        }
+        throw new ChargerError(ERROR_KINDS.UNREACHABLE, 'Unreachable: ECONNREFUSED');
+      }
+      return original(request);
+    };
+    const ctx = await setup(t, { config: TOKEN_CFG, server });
+    const current = ctx.fire('set-current', '10');
+    await ctx.advance(500);
+    const stop = ctx.fire('stop-charge');
+    await ctx.advance(30 * SECOND);
+    assert.equal((await current).success, true);
+    assert.equal((await stop).success, true);
+    assert.ok(ctx.logs.some((l) => /stop again failed/.test(l)));
+    assert.equal(ctx.charger.ev.ChargeCurrentLimit, 0, 'the charge never stays resumed');
+    assert.ok(ctx.limits().filter((l) => l === 0).length <= 4, 'reaffirmed twice at most');
+  });
+}
+
+/** A first run that keeps the serial in /data, then a new app on the same Gladys and store. */
+async function restart(t, prepare, config = TOKEN_CFG) {
+  const store = memoryStore();
+  const first = await setup(t, { config, store });
+  assert.deepEqual(store.data.charger, { address: HOST, serial: SERIAL }, 'serial kept');
+  first.app.stop();
+  const server = fakeCharger();
+  prepare(store, server);
+  const app = new PeblarApp({
+    gladys: first.gladys,
+    logger: { debug() {}, info() {}, warn() {}, error() {} },
+    transport: server.transport,
+    now: () => Date.now(),
+    store,
+  });
+  t.after(() => app.stop());
+  await app.connected(config);
+  await settle();
+  const device = first.gladys.fake.devices.find((d) => d.external_id === DEVICE);
+  const feature = (role) => device.features.find((f) => f.external_id === `${DEVICE}:${role}`);
+  return {
+    app,
+    server,
+    gladys: first.gladys,
+    send: (role, value = 1) => app.setValue(device, feature(role), value),
+  };
+}
+
+for (const [name, prepare] of [
+  ['a 5xx pause kept', (store) => (store.data.pause = { until: NOW + 5 * MINUTE, reason: '5xx' })],
+  ['a 429 pause kept', (store) => (store.data.pause = { until: NOW + 6 * HOUR, reason: '429' })],
+  [
+    'a block kept',
+    (store) => (store.data.block = { until: NOW + HOUR, mode: 'token', failures: 2 }),
+  ],
+  ['the charger down at the start', (_store, server) => (server.charger.down = true)],
+  [
+    'no serial kept (0.1.1) and a 5xx pause',
+    (store) => {
+      store.data.charger = null;
+      store.data.pause = { until: NOW + 5 * MINUTE, reason: '5xx' };
+    },
+  ],
+]) {
+  test(`0.1.2 #2: after a restart with ${name}, the stop goes before any read`, async (t) => {
+    const ctx = await restart(t, prepare);
+    ctx.server.charger.down = false;
+    const before = ctx.server.requests.length;
+    await ctx.send('stop-charge');
+    assert.deepEqual(ctx.server.paths().slice(before), ['PATCH /api/wlac/v1/evinterface']);
+    assert.equal(ctx.server.charger.ev.ChargeCurrentLimit, 0);
+    // Start and the current wait for a read (identity and bounds unchecked).
+    await assert.rejects(ctx.send('start-charge'), /(première lecture|n'est pas lue)/);
+    await assert.rejects(ctx.send('set-current', '10'), /(première lecture|n'est pas lue)/);
+    // Shown offline meanwhile, never "another charger".
+    assert.doesNotMatch(ctx.gladys.fake.connectionStatus.message.fr, /Plus lue/);
+    if (name !== 'no serial kept (0.1.1) and a 5xx pause') {
+      assert.equal(ctx.gladys.fake.lastState(`${DEVICE}:status`), 'Borne injoignable');
+    }
+  });
+}
+
+test('0.1.2 #2: a serial kept for another address is never restored', async (t) => {
+  const ctx = await restart(t, (store) => {
+    store.data.charger = { address: '192.168.1.99', serial: SERIAL };
+    store.data.pause = { until: NOW + 5 * MINUTE, reason: '5xx' };
+  });
+  await assert.rejects(ctx.send('start-charge'), /n'est pas lue/);
+  assert.equal(ctx.app.charger.serial, undefined);
+});
+
+test('0.1.2 #3: the follow-up reads of several commands are not stacked', async (t) => {
+  // The charger ignores the stop: each press sends one, with its follow-up reads.
+  const ctx = await setup(t, { config: TOKEN_CFG, server: fakeCharger({ applies: false }) });
+  for (let i = 0; i < 4; i += 1) {
+    const ack = await ctx.press('stop-charge', 1, SECOND);
+    assert.equal(ack.success, true, ack.error);
+  }
+  assert.ok(ctx.app.charger.followUps.size <= 2, 'one series pending at a time');
+  const reads = () => ctx.server.paths().filter((p) => p === 'GET /api/wlac/v1/system').length;
+  const before = reads();
+  await ctx.advance(25 * SECOND, SECOND);
+  assert.ok(reads() - before <= 3, 'two follow-up reads and one poll at most');
+});
+
+test('0.1.2 M6: during a 5xx pause, a command refused says "server error"', async (t) => {
+  const ctx = await setup(t, { config: TOKEN_CFG });
+  ctx.charger.statuses['/api/wlac/v1/system'] = 503;
+  await ctx.advance(30 * SECOND, SECOND);
+  assert.equal(ctx.store.data.pause.reason, '5xx');
+  delete ctx.charger.statuses['/api/wlac/v1/system'];
+  const ack = await ctx.press('set-current', '10');
+  assert.equal(ack.success, false);
+  assert.match(ack.error, /erreur serveur/);
+  assert.doesNotMatch(ack.error, /ralentir/);
+});
+
+test('0.1.2 M8: credentials pasted in the address are ignored and never shown back', async (t) => {
+  for (const host of [`admin:s3cret@${HOST}`, `http://admin:s3cret@${HOST}/`]) {
+    const server = fakeCharger();
+    const ctx = await setup(t, { config: { ...TOKEN_CFG, host }, server });
+    const { message } = ctx.status();
+    assert.match(message.en, /holds a user name or a password/);
+    assert.ok(!JSON.stringify(message).includes('s3cret'));
+    assert.equal(server.requests.length, 0);
+    ctx.app.stop();
+    t.mock.timers.reset();
+  }
 });

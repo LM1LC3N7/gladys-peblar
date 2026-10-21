@@ -2,15 +2,19 @@
 // What must survive a restart, in /data (the only writable place of the
 // container): the end of a pause (429, or a 5xx), and the block after a token
 // or a password refused, so a restart never asks the charger again before its
-// time and never loops on a refused login. Bounded when read back: a pause
-// never more than 6 h away, a block never more than the longest new-try delay.
+// time and never loops on a refused login; and the serial of the charger last
+// read at the address, so "Stop charging" is never refused before the first
+// read after a restart. Bounded when read back: a pause never more than 6 h
+// away, a block never more than the longest new-try delay.
 // NO SECRET: neither the token, nor the password, nor anything derived from
-// them; the block only keeps which kind of credential was refused. The file
+// them; the block only keeps which kind of credential was refused; the serial
+// is the id of the device, not a secret. The file
 // is readable by the container user only (0600).
 // -----------------------------------------------------------------------------
 
 import { readFile, rename, writeFile } from 'node:fs/promises';
 import { TIMINGS } from './constants.js';
+import { serialOf } from './peblar/client.js';
 
 export const STATE_FILE = '/data/peblar-state.json';
 
@@ -57,7 +61,8 @@ const longestBlock = TIMINGS.authBackoff.at(-1);
 
 /**
  * The persisted state, repaired and bounded:
- * `{ pause: { until, reason } | null, block: { until, mode, failures } | null }`.
+ * `{ pause: { until, reason } | null, block: { until, mode, failures } | null,
+ * charger: { address, serial } | null }`.
  */
 export function normalizeMemory(raw, now) {
   const data = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
@@ -81,5 +86,22 @@ export function normalizeMemory(raw, now) {
             failures: Math.min(failures, 100),
           }
         : null,
+    charger: chargerOf(data.charger),
   };
+}
+
+/**
+ * The last charger read at an address (`{ address, serial }`, as
+ * `addressKey` and the serial of src/peblar/client.js give them): restored
+ * at a start for the same address, so that a stop goes before any read.
+ */
+function chargerOf(raw) {
+  const charger = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  return typeof charger.address === 'string' &&
+    charger.address.length > 0 &&
+    charger.address.length <= 300 &&
+    typeof charger.serial === 'string' &&
+    serialOf(charger.serial) === charger.serial
+    ? { address: charger.address, serial: charger.serial }
+    : null;
 }

@@ -44,7 +44,9 @@ daily consumption is published, and a total of 0 is never published.
    Settings, **Local REST API**: turn it on, with **read and write** access if
    you want the commands, and copy the **API token**.
 3. Install the integration from the Gladys store. In its configuration, enter
-   the **IP address of the charger** and the **API token**.
+   the **IP address of the charger** and the **API token** (an address
+   holding a user name or a password, with an `@`, is ignored and never shown
+   back).
    - Instead of the token, you may give the **password of the web
      interface**: the integration then logs in to read the token (the local
      REST API must still be on), the installation limit and the rated current
@@ -98,11 +100,17 @@ another one is refused at once, **except "Stop charging", never held back**:
 it goes at once, even while another command is in flight (it is then sent
 once more when that command ends, and any start or current not sent yet gives
 way to it), even within the minute between two currents, even during a 429
-pause (then a single request, without the read), and even when the read
-just before fails. When a command stayed without confirmation, it may still
-reach the charger later: a stop sent within the next 90 seconds is watched,
-and sent again (twice at most) if a read shows a current again while no other
-command left.
+or 5xx pause or a refused-token block (then a single request, without the read),
+even after a restart of the integration before the charger could be read
+again (the serial number of the charger last read at the address is kept in
+`/data`; Start and the current wait for that first read), and even when the
+read just before fails. With the password only, a stop needs the token read
+at the last login: after a restart, until the first login, or during a
+password block, it is refused. When a command stayed without confirmation,
+or when a stop overtook a command in flight, that command may still reach
+the charger later: the stop is watched for 90 seconds, and sent again (twice
+at most) if a read shows a current again while no other command left, also
+when the stop sent again after that command failed.
 
 A token in **read only** mode (access mode of the local REST API) refuses
 every command; the status says so.

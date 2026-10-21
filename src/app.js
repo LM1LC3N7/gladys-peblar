@@ -82,6 +82,8 @@ const freshCharger = () => ({
   timer: undefined,
   running: undefined,
   followUps: new Set(),
+  /** When a polling read last gave the serial; -Infinity: a serial kept in /data, not read since the start. */
+  readAt: -Infinity,
   healthAt: -Infinity,
   webAt: -Infinity,
   /** When the last request that writes left, resends included (a read begun before it is quarantined). */
@@ -144,6 +146,13 @@ export class PeblarApp {
       this.pausedUntil = Math.max(this.pausedUntil, this.memory.pause.until);
     }
     this.charger = freshCharger();
+    // The charger last read at this address: "Stop charging" goes before any
+    // read (a pause or a block kept, the charger down at the start). Start
+    // and the current wait for a read (readAt).
+    const kept = this.memory.charger;
+    if (this.config.address && kept?.address === addressKey(this.config.address)) {
+      this.charger.serial = kept.serial;
+    }
     this.token = undefined;
     this.cookie = undefined;
     // Restarted for a new address or new credentials: they may log in at once.
@@ -209,6 +218,7 @@ export class PeblarApp {
     return (
       JSON.stringify(next.address ?? null) !== JSON.stringify(this.config.address ?? null) ||
       next.invalidHost !== this.config.invalidHost ||
+      next.credentialsInHost !== this.config.credentialsInHost ||
       credentialsKey(next) !== credentialsKey(this.config)
     );
   }
@@ -290,6 +300,18 @@ export class PeblarApp {
       return undefined;
     }
     return this.config.auth?.mode === 'token' ? this.config.auth.token : this.token;
+  }
+
+  /**
+   * The token of a command. A stop also goes during a block with the
+   * configured token (one request: never held back); the token read with a
+   * password is dropped by a block, so a stop then has none.
+   */
+  commandToken(role) {
+    if (role === FEATURES.STOP && this.config.auth?.mode === 'token') {
+      return this.config.auth.token;
+    }
+    return this.currentToken();
   }
 
   get loginAllowed() {
@@ -447,7 +469,8 @@ export class PeblarApp {
     const generation = this.generation;
     const c = this.charger;
     if (this.paused || this.blocked) {
-      await this.updateStatus();
+      // Not read: a device known only from /data is shown offline.
+      await this.publishAll();
       this.schedule();
       return;
     }
@@ -471,6 +494,7 @@ export class PeblarApp {
         this.logger.debug('Peblar: read begun before a command, not applied');
       } else {
         this.applyRead(read);
+        await this.saveChargerId();
         if (this.memory.block) {
           this.memory.block = null;
           await this.saveMemory();
@@ -567,11 +591,27 @@ export class PeblarApp {
       });
     }
     c.serial = system.serial;
+    c.readAt = this.now();
     c.firmware = system.firmware ?? c.firmware;
     c.phases = system.phases ?? c.phases;
     c.system = system;
     this.applyEv(ev);
     c.meter = meter;
+  }
+
+  /** Keeps in /data the serial read at this address, when it changed (src/store.js). */
+  async saveChargerId() {
+    const c = this.charger;
+    if (!c.serial || c.readAt === -Infinity || !this.config.address) {
+      return;
+    }
+    const address = addressKey(this.config.address);
+    const kept = this.memory.charger;
+    if (kept?.address === address && kept.serial === c.serial) {
+      return;
+    }
+    this.memory.charger = { address, serial: c.serial };
+    await this.saveMemory();
   }
 
   /** fromCommand: the fresh read of a command (never reaffirms a stop: it would race it). */
@@ -690,6 +730,9 @@ export class PeblarApp {
   status() {
     const c = this.charger;
     if (!this.config.address) {
+      if (this.config.credentialsInHost) {
+        return [false, T.hostCredentials];
+      }
       return [false, this.config.invalidHost ? T.invalidHost(this.config.invalidHost) : T.noHost];
     }
     if (!this.config.auth) {
@@ -762,6 +805,18 @@ export class PeblarApp {
   known() {
     const c = this.charger;
     return c.serial && c.ev ? c : undefined;
+  }
+
+  /**
+   * The serial kept in /data, not read since the start, while it cannot be
+   * read (down, a pause, a block): its device is shown offline, never left
+   * "charging" nor called "another charger".
+   */
+  keptOffline() {
+    const c = this.charger;
+    return c.serial && !c.ev && (c.online === false || this.paused || this.blocked)
+      ? c.serial
+      : undefined;
   }
 
   /**
@@ -844,6 +899,8 @@ export class PeblarApp {
     const c = this.known();
     if (c) {
       push(c.serial, c, c.online !== false);
+    } else if (this.keptOffline()) {
+      push(this.keptOffline(), {}, false);
     }
     // A created device the charger read is not: unreachable, never left "charging".
     for (const serial of this.orphans()) {
@@ -859,6 +916,14 @@ export class PeblarApp {
       entries.push({
         external_id: chargerIds(this.gladys, c.serial).device,
         transport: c.online === false ? DEVICE_TRANSPORTS.UNREACHABLE : DEVICE_TRANSPORTS.LOCAL,
+      });
+    } else if (
+      this.keptOffline() &&
+      created.has(chargerIds(this.gladys, this.keptOffline()).device)
+    ) {
+      entries.push({
+        external_id: chargerIds(this.gladys, this.keptOffline()).device,
+        transport: DEVICE_TRANSPORTS.UNREACHABLE,
       });
     }
     for (const serial of this.orphans()) {
@@ -963,7 +1028,7 @@ export class PeblarApp {
     if (!this.config.allowCommands) {
       throw this.refusal(ERRORS.disabled);
     }
-    if (target.serial !== this.charger.serial) {
+    if (!this.addressed(target.serial, target.role)) {
       throw this.refusal(ERRORS.unknownCharger);
     }
     const { role } = target;
@@ -981,6 +1046,8 @@ export class PeblarApp {
       role,
       sentAt: undefined,
       overtaken: previous?.promise,
+      /** The command overtaken: its `sentAt` says whether it really left. */
+      overtakenEntry: previous,
       again: undefined,
       promise: undefined,
     };
@@ -1004,24 +1071,53 @@ export class PeblarApp {
     }
   }
 
+  /**
+   * Whether a command for `serial` goes to the charger at the address: the
+   * one read (or kept in /data). A stop also goes when no charger is known
+   * since the start (no serial kept: /data lost or written by 0.1.1) to a
+   * device created in Gladys: stopping whatever answers at the configured
+   * address is harmless, and a stop is never held back.
+   */
+  addressed(serial, role) {
+    const c = this.charger;
+    if (c.serial !== undefined) {
+      return c.serial === serial;
+    }
+    return (
+      role === FEATURES.STOP &&
+      c.readAt === -Infinity &&
+      Boolean(this.config.address) &&
+      (this.gladys.devices ?? []).some(
+        (d) => d.external_id === chargerIds(this.gladys, serial).device,
+      )
+    );
+  }
+
   /** The checks before sending, on the latest configuration. */
   checkBeforeSend(generation, serial, role) {
     if (!this.config.allowCommands) {
       throw this.refusal(ERRORS.disabled);
     }
-    if (generation !== this.generation || this.charger.serial !== serial) {
+    if (generation !== this.generation || !this.addressed(serial, role)) {
       throw this.refusal(ERRORS.unknownCharger);
     }
     if (role !== FEATURES.STOP) {
+      if (this.charger.readAt === -Infinity) {
+        // A serial kept in /data, not read since the start: bounds and identity unchecked.
+        throw this.refusal(ERRORS.notReadYet);
+      }
       if (this.paused) {
-        throw this.refusal(ERRORS.paused(age(this.pausedUntil - this.now())));
+        const wait = age(this.pausedUntil - this.now());
+        throw this.refusal(
+          this.memory.pause?.reason === '5xx' ? ERRORS.serverPaused(wait) : ERRORS.paused(wait),
+        );
       }
       const since = this.now() - this.charger.lastCurrentAt;
       if (since < TIMINGS.currentMinInterval) {
         throw this.refusal(ERRORS.tooOften(age(TIMINGS.currentMinInterval - since)));
       }
     }
-    if (!this.currentToken()) {
+    if (!this.commandToken(role)) {
       throw this.refusal(ERRORS.noCredentials);
     }
     if (this.charger.accessMode === 'ReadOnly') {
@@ -1093,12 +1189,14 @@ export class PeblarApp {
       TIMINGS.commandReadMax,
       sendBy - TIMINGS.commandMinSend - this.now(),
     );
-    // During a pause, a stop is one request: no fresh read.
-    if (readBudget >= TIMINGS.commandMinRead && !(isStop && this.paused)) {
+    // During a pause or a block, or before the first read (a serial kept in
+    // /data), a stop is one request: no fresh read.
+    const oneRequest = this.paused || this.blocked || c.readAt === -Infinity;
+    if (readBudget >= TIMINGS.commandMinRead && !(isStop && oneRequest)) {
       const readStart = this.now();
       try {
         fresh = parseEvInterface(
-          await this.client.rest(address, this.currentToken(), PATHS.rest.evInterface, {
+          await this.client.rest(address, this.commandToken(role), PATHS.rest.evInterface, {
             timeoutMs: readBudget,
           }),
         );
@@ -1146,8 +1244,15 @@ export class PeblarApp {
       c.lastCurrentAt = this.now();
     }
     this.logger.info(`Peblar: ${role} (limit ${plan.limit} mA)`);
+    // Decided after the send: a command this stop overtook (it really left)
+    // may land after it, whatever its own outcome; so may one left
+    // unconfirmed in the last 90 s.
+    const reassertFrom = () =>
+      isStop && (this.unconfirmed || entry.overtakenEntry?.sentAt !== undefined)
+        ? entry.sentAt
+        : undefined;
     try {
-      await this.client.setLimit(address, this.currentToken(), plan.limit, {
+      await this.client.setLimit(address, this.commandToken(role), plan.limit, {
         startBy: sendBy,
         timeoutMs,
       });
@@ -1184,12 +1289,12 @@ export class PeblarApp {
         // the next 90 s is reaffirmed if a read shows a current again.
         c.unconfirmedUntil = this.now() + TIMINGS.guard;
       }
-      this.guard(serial, plan, isStop && this.unconfirmed ? entry.sentAt : undefined);
+      this.guard(serial, plan, reassertFrom());
       this.followUp();
       this.stopAgain(serial, entry, plan);
       throw this.refusal(ERRORS.sentUnconfirmed(reason));
     }
-    this.guard(serial, plan, isStop && this.unconfirmed ? entry.sentAt : undefined);
+    this.guard(serial, plan, reassertFrom());
     this.followUp();
     this.stopAgain(serial, entry, plan);
   }
@@ -1214,7 +1319,7 @@ export class PeblarApp {
           this.logger.info('Peblar: stop not sent again (newer command sent)');
           return;
         }
-        const token = this.currentToken();
+        const token = this.commandToken(FEATURES.STOP);
         if (!token || this.charger.serial !== serial) {
           return;
         }
@@ -1228,6 +1333,12 @@ export class PeblarApp {
       })
       .catch(async (err) => {
         this.logger.warn(`Peblar: stop again failed (${errorReason(err)})`);
+        if (this.charger.serial === serial) {
+          // Failed: the reads to come reaffirm the stop (twice at most) if
+          // the command it overtook landed after it.
+          this.guard(serial, plan, entry.sentAt);
+          this.followUp();
+        }
         if (err.kind === ERROR_KINDS.RATE_LIMITED) {
           await this.pause(err);
           await this.updateStatus();
@@ -1236,10 +1347,18 @@ export class PeblarApp {
       .catch(() => {});
   }
 
-  /** Spaced reads after a command: its effect, then a check (each a new read). */
+  /**
+   * Spaced reads after a command: its effect, then a check (each a new read).
+   * The reads of an earlier command not done yet are replaced: one series
+   * pending at a time (a scene pressing in a loop never multiplies them).
+   */
   followUp() {
     const generation = this.generation;
     const c = this.charger;
+    for (const handle of c.followUps) {
+      this.timers.clearTimeout(handle);
+    }
+    c.followUps.clear();
     for (const delay of TIMINGS.followUps) {
       const handle = this.timers.setTimeout(() => {
         c.followUps.delete(handle);
@@ -1328,7 +1447,7 @@ export class PeblarApp {
 
   /** Sends the stop again (a late command landed after it). No read, no option check. */
   reassertStop(serial) {
-    const token = this.currentToken();
+    const token = this.commandToken(FEATURES.STOP);
     if (!token || this.charger.serial !== serial) {
       return;
     }

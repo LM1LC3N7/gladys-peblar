@@ -46,7 +46,9 @@ publiée, et un total de 0 n'est jamais publié.
    Paramètres, **API REST locale** : activez-la, en **lecture et écriture**
    si vous voulez les commandes, et copiez le **jeton d'API**.
 3. Installez l'intégration depuis le store de Gladys. Dans sa configuration,
-   saisissez l'**adresse IP de la borne** et le **jeton d'API**.
+   saisissez l'**adresse IP de la borne** et le **jeton d'API** (une adresse
+   qui contient un nom d'utilisateur ou un mot de passe, avec un `@`, est
+   ignorée et jamais réaffichée).
    - À la place du jeton, vous pouvez donner le **mot de passe de
      l'interface web** : l'intégration se connecte alors pour lire le jeton
      (l'API REST locale doit quand même être activée), la limite de
@@ -105,12 +107,19 @@ commande à la fois : une autre est refusée aussitôt, **sauf « Arrêter la
 charge », jamais retenu** : il part tout de suite, même pendant une autre
 commande (il est alors renvoyé une fois quand elle se termine, et un
 démarrage ou un courant pas encore envoyé lui cède la place), même dans la
-minute entre deux courants, même pendant une pause 429 (alors une seule
-requête, sans relecture), et même quand la lecture juste avant échoue. Quand
-une commande est restée sans confirmation, elle peut encore atteindre la borne
-plus tard : un arrêt envoyé dans les 90 secondes qui suivent est surveillé, et
-renvoyé (deux fois au plus) si une lecture montre de nouveau un courant alors
-qu'aucune autre commande n'est partie.
+minute entre deux courants, même pendant une pause 429 ou 5xx ou un blocage
+sur jeton refusé (alors une seule requête, sans relecture), même après un
+redémarrage de l'intégration avant que la borne ait pu être relue (le numéro
+de série de la dernière borne lue à cette adresse est gardé dans `/data` ;
+Démarrer et le courant attendent cette première lecture), et même quand la
+lecture juste avant échoue. Avec le mot de passe seul, un arrêt a besoin du
+jeton lu à la dernière connexion : après un redémarrage, avant la première
+connexion, ou pendant un blocage sur mot de passe, il est refusé. Quand une
+commande est restée sans confirmation, ou quand un arrêt a doublé une
+commande en cours, celle-ci peut encore atteindre la borne plus tard :
+l'arrêt est surveillé pendant 90 secondes, et renvoyé (deux fois au plus) si
+une lecture montre de nouveau un courant alors qu'aucune autre commande n'est
+partie, y compris quand le renvoi de l'arrêt après cette commande a échoué.
 
 Un jeton en **lecture seule** (mode d'accès de l'API REST locale) refuse
 toute commande ; l'état de l'intégration le signale.

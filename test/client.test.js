@@ -148,5 +148,14 @@ test('the memory in /data is repaired and bounded, and holds no secret', () => {
   assert.equal(memory.pause.reason, '429');
   assert.equal(memory.block.until, now + 6 * 3_600_000);
   assert.ok(!JSON.stringify(memory).includes('leak'));
-  assert.deepEqual(normalizeMemory('garbage', now), { pause: null, block: null });
+  assert.deepEqual(normalizeMemory('garbage', now), { pause: null, block: null, charger: null });
+  // The serial kept with its address: only a valid serial, never anything else.
+  const kept = normalizeMemory(
+    { charger: { address: '192.168.1.60', serial: '23-45-abc-678', token: 'leak' } },
+    now,
+  );
+  assert.deepEqual(kept.charger, { address: '192.168.1.60', serial: '23-45-abc-678' });
+  for (const serial of ['23-45-ABC-678', '../x', '', 7, 'a'.repeat(41)]) {
+    assert.equal(normalizeMemory({ charger: { address: 'h', serial } }, now).charger, null);
+  }
 });

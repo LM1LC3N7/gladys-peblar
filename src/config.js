@@ -78,15 +78,19 @@ export function normalizeConfig(raw = {}) {
     }
   }
   const typed = String(c.host ?? '').trim();
-  const address = parseAddress(typed);
+  // A pasted URL with `user:password@`: never parsed, never shown (it may hold a password).
+  const credentialsInHost = typed.includes('@');
+  const address = credentialsInHost ? undefined : parseAddress(typed);
   const token = secret(c.api_token);
   const password = secret(c.password);
   const interval = Number(c.poll_interval);
   const ceiling = Number(c.max_current);
   return {
     address,
-    /** The text typed when it is not an address (shown in the status, cut). */
-    invalidHost: typed !== '' && !address ? typed.slice(0, 100) : undefined,
+    /** The text typed when it is not an address (shown in the status, cut); never with an `@`. */
+    invalidHost: typed !== '' && !address && !credentialsInHost ? typed.slice(0, 100) : undefined,
+    /** Credentials typed in the address field: a fixed message, the text never shown. */
+    credentialsInHost,
     /** The token wins when both are given: no login needed. */
     auth: token ? { mode: 'token', token } : password ? { mode: 'password', password } : undefined,
     /** A secret typed but refused (non-ASCII, too long). */

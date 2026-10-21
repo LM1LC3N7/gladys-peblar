@@ -32,6 +32,12 @@ up to date at the end of every milestone.
       change only reschedules and new credentials or address log in at once
       (I3), and M1-M11 (see Decisions). Reviewer scenarios S1-S20 in
       `test/review.test.js`.
+- [x] **0.1.2 fixes** (2026-10-21, found on the sibling modules nrgkick and
+      openevse): the stop sent again that fails keeps its reaffirmation, a
+      stop before the first read after a restart, follow-up reads not
+      stacked, "server error" refusal during a 5xx pause, credentials in the
+      address never shown (see Decisions). Tests "0.1.2" in
+      `test/review.test.js`.
 - [ ] **Milestone 2 — real charger**: run against a real Rocksolid (see "To
       check"), turn the answers (anonymized) into fixtures.
 - [ ] **Milestone 3 — more**: several chargers, the websocket of the web API
@@ -202,6 +208,28 @@ up to date at the end of every milestone.
     which renews it from its own time (S2b); the reaffirmation only comes
     from the polling and follow-up reads, never from the fresh read of a
     command nor while a start or a current is in flight (S2c).
+- **0.1.2 fixes** (2026-10-21, models: gladys-nrgkick 152dca0 I1, M6, M8;
+  gladys-openevse 0cad0dc B1, M4):
+  - the reaffirmation of a stop is decided after its send, and also when the
+    stop overtook a command that really left (`overtakenEntry.sentAt`); a
+    stop sent again (`stopAgain`) that fails sets the guard with the
+    reaffirmation and schedules the follow-up reads;
+  - `/data` keeps `charger: { address, serial }` (the serial is the id of
+    the device, not a secret); restored at a start for the same address
+    (`readAt` -Infinity until a polling read). Before that read only the
+    stop is accepted, as one request (no fresh read); start and current are
+    refused ("not read yet"). No serial kept (0.1.1, /data lost): a stop to a
+    device created in Gladys still goes to the address. The kept device is
+    shown offline while it cannot be read (down, pause, block), never "not
+    read any more";
+  - a stop goes during a block with the configured API token (one request);
+    with the password, the token read at the login is dropped by a block, so
+    a stop is refused until a login (said in the docs);
+  - follow-up reads: one series pending at a time (a new command replaces
+    the pending one);
+  - a command refused during a 5xx pause says "server error";
+  - an address holding an `@` is ignored (`credentialsInHost`), the status
+    gives a fixed text, never the typed one.
 - **Late answers** (KEBA M1/M2, over HTTP): an answer always belongs to its
   request; but a poll read begun before a command left may show the state
   before it: it is quarantined (neither applied, nor published, nor used by

@@ -84,7 +84,10 @@ test/                             node --test, against the SDK's fake Gladys (in
   EV interface, are checked again right before sending, and all write
   `ChargeCurrentLimit` (0 = stop). "Stop charging" is never held back (a
   command in flight, the minute between currents, a pause, a failed read).
-  A stop sent within 90 s of an unconfirmed command is reaffirmed. The
+  A stop sent within 90 s of an unconfirmed command, or that overtook a
+  command in flight, is reaffirmed (also when its resend fails). The serial
+  last read is kept in `/data`: before the first read after a restart only
+  the stop is accepted. The
   ceiling never reads `UserDefinedChargeLimitCurrent` (it mirrors the writes).
   Start refused without a vehicle; the current capped by the ceiling; one
   current change a minute. A read begun before a command left is never

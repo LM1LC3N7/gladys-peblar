@@ -85,6 +85,10 @@ export const T = {
       `"${typed}" is not an IP address nor a host name.`,
       `« ${typed} » n'est ni une adresse IP ni un nom d'hôte.`,
     ),
+  hostCredentials: both(
+    'The address holds a user name or a password (an "@"): enter the IP address (or host name) of the charger only, then save.',
+    "L'adresse contient un nom d'utilisateur ou un mot de passe (un « @ ») : saisissez seulement l'adresse IP (ou le nom d'hôte) de la borne, puis enregistrez.",
+  ),
   noAuth: both(
     'Enter the API token of the local REST API, or the password of the web interface of the charger, then save.',
     "Saisissez le jeton d'API de l'API REST locale, ou le mot de passe de l'interface web de la borne, puis enregistrez.",
@@ -178,6 +182,15 @@ export const ERRORS = {
       `The charger asked to slow down: commands paused for ${wait.en} ("Stop charging" stays available).`,
       `La borne a demandé de ralentir : commandes en pause pendant ${wait.fr} (« Arrêter la charge » reste disponible).`,
     ),
+  serverPaused: (wait) =>
+    both(
+      `The charger answered with a server error (HTTP 5xx): commands paused for ${wait.en} ("Stop charging" stays available).`,
+      `La borne a répondu par une erreur serveur (HTTP 5xx) : commandes en pause pendant ${wait.fr} (« Arrêter la charge » reste disponible).`,
+    ),
+  notReadYet: both(
+    'The charger has not been read since the integration started: only "Stop charging" is accepted until the first read. Not sent.',
+    "La borne n'a pas encore été lue depuis le démarrage de l'intégration : seul « Arrêter la charge » est accepté avant la première lecture. Non envoyée.",
+  ),
   noCredentials: both(
     'The charger has no valid token at the moment (refused or not read yet): not sent.',
     "La borne n'a pas de jeton valable pour l'instant (refusé ou pas encore lu) : non envoyée.",

@@ -10,6 +10,21 @@ the notes of the version's GitHub Release.
 
 ## [Unreleased]
 
+### Fixed
+
+- A stop that overtook a start or a current in flight, whose resend then
+  failed (5xx, silence, unreachable), is now reaffirmed by the next reads: the
+  charge no longer resumes when that command lands after the stop.
+- "Stop charging" is no longer refused after a restart before the first read
+  (a 429/5xx pause or a block kept in `/data`, the charger down): the serial
+  last read at the address is kept in `/data`; Start and the current wait for
+  a read. With the API token, a stop also goes during a block.
+- The follow-up reads of several commands are no longer stacked (one series
+  pending at a time).
+- During a 5xx pause, a refused command says "server error", not "slow down".
+- Credentials pasted in the address (`user:password@`) are ignored and never
+  shown back in the status.
+
 ## [0.1.1] - 2026-10-19
 
 ### Added
